@@ -91,8 +91,14 @@ export default function Dashboard({
       showToasts('Please paste some resume text so the AI can extract sections.', 'info');
       return;
     }
-    if (!settings?.groqApiKey) {
-      showToasts('Please configure your Groq API Key in Settings to parse via AI.', 'error');
+    const isAiConfigured = 
+      (settings?.aiProvider === 'Gemini' && settings?.geminiApiKey) ||
+      (settings?.aiProvider === 'OpenAI' && settings?.openaiApiKey) ||
+      (settings?.aiProvider === 'OpenRouter' && settings?.openRouterApiKey) ||
+      ((settings?.aiProvider === 'Groq' || !settings?.aiProvider) && settings?.groqApiKey);
+
+    if (!isAiConfigured) {
+      showToasts(`Please configure your ${settings?.aiProvider || 'Groq'} API Key in Settings to parse via AI.`, 'error');
       return;
     }
     setLoadingAction(true);
@@ -455,9 +461,12 @@ export default function Dashboard({
                 Paste your current resume content, LinkedIn Markdown, or unstructured text. Our AI will automatically extract and categorize your experience, education, skills, and certifications into a new document.
               </p>
 
-              {!settings?.groqApiKey && (
+              {!((settings?.aiProvider === 'Gemini' && settings?.geminiApiKey) ||
+                (settings?.aiProvider === 'OpenAI' && settings?.openaiApiKey) ||
+                (settings?.aiProvider === 'OpenRouter' && settings?.openRouterApiKey) ||
+                ((settings?.aiProvider === 'Groq' || !settings?.aiProvider) && settings?.groqApiKey)) && (
                 <div className="mb-6 rounded-xl bg-amber-500/10 border border-amber-500/20 p-4 text-sm text-amber-400 font-medium leading-normal">
-                  You must have a Groq API Key set up to parse via AI. Configure this in Settings.
+                  You must have an AI Provider API Key set up to parse via AI. Configure this in Settings.
                 </div>
               )}
 
@@ -491,7 +500,10 @@ export default function Dashboard({
                     </button>
                     <button
                       type="submit"
-                      disabled={loadingAction || !settings?.groqApiKey}
+                      disabled={loadingAction || !((settings?.aiProvider === 'Gemini' && settings?.geminiApiKey) ||
+                        (settings?.aiProvider === 'OpenAI' && settings?.openaiApiKey) ||
+                        (settings?.aiProvider === 'OpenRouter' && settings?.openRouterApiKey) ||
+                        ((settings?.aiProvider === 'Groq' || !settings?.aiProvider) && settings?.groqApiKey))}
                       className="flex items-center space-x-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 px-5 py-2 text-sm font-semibold text-white shadow-md transition-all active:scale-[0.98] disabled:opacity-50 cursor-pointer"
                     >
                       {loadingAction ? (

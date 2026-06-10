@@ -75,11 +75,9 @@ export default function App() {
     testFirebaseConnection()
       .then(() => {
         setDbConnected(true);
-        triggerToast('Firebase Connected', 'success');
       })
       .catch((err) => {
         setDbConnected(false);
-        triggerToast('Firebase Configuration Error', 'error');
         console.error('Firebase Config Error', err);
       });
 
@@ -182,12 +180,11 @@ export default function App() {
 
   // Auth onSuccess trigger
   const handleAuthSuccess = async () => {
-    triggerToast('Authenticated successfully. Welcome back!', 'success');
+    // Authenticated
   };
 
   const handleLogout = async () => {
     await logoutUser();
-    triggerToast('Logged out of system.', 'info');
   };
 
   // Resume modifications (CRUD)
@@ -298,7 +295,7 @@ export default function App() {
       return;
     }
 
-    const parsedJson = await aiParseResume(apiKey, rawText);
+    const parsedJson = await aiParseResume(effectiveSettings, rawText);
     const title = parsedJson.title || 'Extracted Developer Resume';
     
     // Create new resume with parsed values prefilled
@@ -489,7 +486,7 @@ export default function App() {
                     <ResumeBuilder
                       resume={activeResume}
                       onChange={handleResumeChange}
-                      groqKey={effectiveSettings?.groqApiKey}
+                      settings={effectiveSettings}
                       saving={saving}
                       showToasts={triggerToast}
                     />
@@ -518,7 +515,7 @@ export default function App() {
                 <ATSAnalyzer
                   resumes={resumes}
                   userUid={user.uid}
-                  groqKey={effectiveSettings?.groqApiKey}
+                  settings={effectiveSettings}
                   showToasts={triggerToast}
                   activeResumeId={activeResumeId}
                 />

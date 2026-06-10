@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ResumeData, ExperienceEntry, EducationEntry, ProjectEntry, CertificationEntry, CustomSection, CustomSectionItem } from '../types';
+import { ResumeData, ExperienceEntry, EducationEntry, ProjectEntry, CertificationEntry, CustomSection, CustomSectionItem, UserSettings } from '../types';
 import {
   User,
   Sparkles,
@@ -32,7 +32,7 @@ import ConfirmationDialog from './ConfirmationDialog';
 interface ResumeBuilderProps {
   resume: ResumeData;
   onChange: (updatedResume: ResumeData) => void;
-  groqKey?: string | null;
+  settings: UserSettings;
   saving: boolean;
   showToasts: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
@@ -40,7 +40,7 @@ interface ResumeBuilderProps {
 export default function ResumeBuilder({
   resume,
   onChange,
-  groqKey,
+  settings,
   saving,
   showToasts,
 }: ResumeBuilderProps) {
@@ -65,6 +65,12 @@ export default function ResumeBuilder({
     optimized: string;
     whatChanged: string[];
   } | null>(null);
+
+  const isAiConfigured = 
+    (settings?.aiProvider === 'Gemini' && settings?.geminiApiKey) ||
+    (settings?.aiProvider === 'OpenAI' && settings?.openaiApiKey) ||
+    (settings?.aiProvider === 'OpenRouter' && settings?.openRouterApiKey) ||
+    ((settings?.aiProvider === 'Groq' || !settings?.aiProvider) && settings?.groqApiKey);
 
   const [confirmConfig, setConfirmConfig] = useState<{
     isOpen: boolean;
@@ -241,8 +247,8 @@ export default function ResumeBuilder({
   };
 
   const triggerAiInternship = async (id: string, action: 'improve' | 'professional' | 'metrics' | 'ats') => {
-    if (!groqKey) {
-      showToasts('Please configure your Groq API Key in Settings.', 'error');
+    if (!isAiConfigured) {
+      showToasts('Please configure an AI Provider API Key in Settings.', 'error');
       return;
     }
     const intern = (resume.internships || []).find(i => i.id === id);
@@ -252,7 +258,7 @@ export default function ResumeBuilder({
     }
     setAiLoading(prev => ({ ...prev, [`intern_${id}_${action}`]: true }));
     try {
-      const output = await aiImproveExperience(groqKey, intern.description, action);
+      const output = await aiImproveExperience(settings, intern.description, action);
       updateInternship(id, 'description', output);
       showToasts('Internship points improved!', 'success');
     } catch (err: any) {
@@ -498,8 +504,8 @@ export default function ResumeBuilder({
 
   // AI Actions Triggering
   const triggerAiSummary = async (action: 'improve' | 'shorten' | 'expand' | 'ats') => {
-    if (!groqKey) {
-      showToasts('Please configure your Groq API Key in Settings to execute AI commands.', 'error');
+    if (!isAiConfigured) {
+      showToasts('Please configure an AI Provider API Key in Settings to execute AI commands.', 'error');
       return;
     }
     if (!resume.summary.trim()) {
@@ -508,7 +514,7 @@ export default function ResumeBuilder({
     }
     setAiLoading(prev => ({ ...prev, [`summary_${action}`]: true }));
     try {
-      const output = await aiImproveSummary(groqKey, resume.summary, action, resume.personalDetails.professionalTitle);
+      const output = await aiImproveSummary(settings, resume.summary, action, resume.personalDetails.professionalTitle);
       if (action === 'ats') {
         try {
           const parsed = JSON.parse(output);
@@ -539,8 +545,8 @@ export default function ResumeBuilder({
   };
 
   const triggerAiExperience = async (id: string, action: 'improve' | 'professional' | 'metrics' | 'ats') => {
-    if (!groqKey) {
-      showToasts('Please configure your Groq API Key in Settings.', 'error');
+    if (!isAiConfigured) {
+      showToasts('Please configure an AI Provider API Key in Settings.', 'error');
       return;
     }
     const exp = resume.experience.find(e => e.id === id);
@@ -550,7 +556,7 @@ export default function ResumeBuilder({
     }
     setAiLoading(prev => ({ ...prev, [`exp_${id}_${action}`]: true }));
     try {
-      const output = await aiImproveExperience(groqKey, exp.description, action);
+      const output = await aiImproveExperience(settings, exp.description, action);
       updateExperience(id, 'description', output);
       showToasts('Experience points improved!', 'success');
     } catch (err: any) {
@@ -561,8 +567,8 @@ export default function ResumeBuilder({
   };
 
   const triggerAiProject = async (id: string, action: 'rewrite' | 'ats') => {
-    if (!groqKey) {
-      showToasts('Please configure your Groq API Key in Settings.', 'error');
+    if (!isAiConfigured) {
+      showToasts('Please configure an AI Provider API Key in Settings.', 'error');
       return;
     }
     const proj = resume.projects.find(p => p.id === id);
@@ -572,7 +578,7 @@ export default function ResumeBuilder({
     }
     setAiLoading(prev => ({ ...prev, [`proj_${id}_${action}`]: true }));
     try {
-      const output = await aiImproveProject(groqKey, proj.description, action);
+      const output = await aiImproveProject(settings, proj.description, action);
       updateProject(id, 'description', output);
       showToasts('Project text rewritten!', 'success');
     } catch (err: any) {
@@ -1141,7 +1147,7 @@ export default function ResumeBuilder({
                       </div>
 
                       {/* Internship bullet enhancers */}
-                      {groqKey && (
+                      {isAiConfigured && (
                         <div className="flex flex-wrap items-center gap-1 bg-indigo-500/10 bg-indigo-950/20 border border-indigo-500/20 border-indigo-900/30 p-2 rounded-xl">
                           <span className="text-[9px] uppercase tracking-wider font-bold text-indigo-400 mr-2 flex items-center gap-1">
                             <Sparkles className="h-2.5 w-2.5 text-indigo-400" />

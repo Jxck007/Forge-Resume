@@ -31,24 +31,29 @@ type SettingsTab = 'ai' | 'storage' | 'resume' | 'app';
 
 export default function Settings({ user, showToasts, onKeyConfigured }: SettingsProps) {
   const [settings, setSettings] = useState<UserSettings | null>(null);
-  const [groqKeyInput, setGroqKeyInput] = useState('');
-  const [showKey, setShowKey] = useState(false);
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
   const [activeTab, setActiveTab] = useState<SettingsTab>('ai');
 
-  // AI Settings
-  const [provider, setProvider] = useState('Groq');
-  const [selectedModel, setSelectedModel] = useState('llama-3.3-70b-versatile');
-  const [temperature, setTemperature] = useState(0.4);
-  const [testingConnection, setTestingConnection] = useState(false);
-  const [hasApiKeySet, setHasApiKeySet] = useState(false);
+  // Multi-provider key state
+  const [keysInput, setKeysInput] = useState({
+    groq: '',
+    gemini: '',
+    openai: '',
+    openrouter: ''
+  });
+  
+  const [showKeys, setShowKeys] = useState<{ [key: string]: boolean }>({});
+  const [testingProviders, setTestingProviders] = useState<{ [key: string]: boolean }>({});
 
-  // Storage Settings
+  // Form state
+  const [aiProvider, setAiProvider] = useState<UserSettings['aiProvider']>('Groq');
+  const [selectedModel, setSelectedModel] = useState('');
+  const [temperature, setTemperature] = useState(0.4);
+
+  // Storage and Resume state
   const [storageOccupancy, setStorageOccupancy] = useState('0.00 KB');
   const [cacheSize, setCacheSize] = useState('0.00 MB');
-
-  // Resume Settings
   const [defaultTemplate, setDefaultTemplate] = useState('modern');
   const [defaultExportFormat, setDefaultExportFormat] = useState('PDF');
 
@@ -63,33 +68,31 @@ export default function Settings({ user, showToasts, onKeyConfigured }: Settings
         const data = await getUserSettings(user.uid);
         if (data) {
           setSettings(data);
-          if (data.modelId) setSelectedModel(data.modelId);
+          setAiProvider(data.aiProvider || 'Groq');
+          setSelectedModel(data.modelId || getDefaultModel(data.aiProvider || 'Groq'));
           if (data.temperature !== undefined) setTemperature(data.temperature);
           if (data.defaultTemplate) setDefaultTemplate(data.defaultTemplate);
           if (data.defaultExportFormat) setDefaultExportFormat(data.defaultExportFormat);
-          
-          if (data.groqApiKey && data.groqApiKey.trim() !== '') {
-            setHasApiKeySet(true);
-            // Save settings locally for synchronous access in groq services
-            localStorage.setItem('forge_user_settings', JSON.stringify({
-              modelId: data.modelId || selectedModel,
-              temperature: data.temperature ?? temperature,
-              defaultTemplate: data.defaultTemplate,
-              defaultExportFormat: data.defaultExportFormat
-            }));
-          }
         }
-        
-        // Calculate localStorage occupancy size
         calculateStorageStats();
       } catch (err) {
-        showToasts('Failed loading user settings catalog.', 'error');
+        showToasts('Failed loading user settings.', 'error');
       } finally {
         setFetching(false);
       }
     }
     init();
   }, [user.uid]);
+
+  const getDefaultModel = (prov: string) => {
+    switch (prov) {
+      case 'Groq': return 'llama-3.3-70b-versatile';
+      case 'OpenAI': return 'gpt-4o-mini';
+      case 'Gemini': return 'gemini-1.5-flash';
+      case 'OpenRouter': return 'anthropic/claude-3-haiku';
+      default: return '';
+    }
+  };
 
   const calculateStorageStats = () => {
     try {
@@ -100,79 +103,72 @@ export default function Settings({ user, showToasts, onKeyConfigured }: Settings
         }
       }
       setStorageOccupancy((totalBytes / 1024).toFixed(2) + ' KB');
-      
-      // Cache size estimation - including IndexedDB if support is checked
-      const cacheBytes = totalBytes * 1.45; // Simulated IndexedDB fallback metrics + local blobs
+      const cacheBytes = totalBytes * 1.45;
       setCacheSize((cacheBytes / (1024 * 1024)).toFixed(3) + ' MB');
     } catch {
       // Ignore
     }
   };
 
-  // Test connection before saving
-  const handleTestConnection = async () => {
-    const keyToTest = groqKeyInput.trim() !== '' ? groqKeyInput : (settings?.groqApiKey || '');
+  const handleTestConnection = async (prov: UserSettings['aiProvider']) => {
+    const keyToTest = keysInput[prov.toLowerCase() as keyof typeof keysInput].trim() || (settings?.[`${prov.toLowerCase()}ApiKey` as keyof UserSettings] as string);
+    
     if (!keyToTest) {
-      showToasts('Please provide or configure a Groq API Key first.', 'error');
+      showToasts(`Please provide an API Key for ${prov} first.`, 'error');
       return;
     }
 
-    setTestingConnection(true);
-    showToasts('Testing active connection to Groq API...', 'info');
+    setTestingProviders(prev => ({ ...prev, [prov]: true }));
+    showToasts(`Verifying ${prov} API status...`, 'info');
 
     try {
-      const ok = await testGroqConnection(keyToTest, selectedModel);
+      const testSettings = {
+        ...settings,
+        aiProvider: prov,
+        modelId: selectedModel || getDefaultModel(prov),
+        [`${prov.toLowerCase()}ApiKey`]: keyToTest
+      } as UserSettings;
+
+      const ok = await testGroqConnection(testSettings);
       if (ok) {
-        showToasts('Groq API connection test successful!', 'success');
+        showToasts(`${prov} connection verified successfully!`, 'success');
       } else {
-        showToasts('Groq API connection test failed.', 'error');
+        showToasts(`${prov} connection test failed.`, 'error');
       }
     } catch (err: any) {
-      showToasts(`Connection Failed: ${err.message || String(err)}`, 'error');
+      showToasts(`${prov} Failed: ${err.message || String(err)}`, 'error');
     } finally {
-      setTestingConnection(false);
+      setTestingProviders(prev => ({ ...prev, [prov]: false }));
     }
   };
 
-  // Handle Save
   const handleSaveSettings = async () => {
     setLoading(true);
-    showToasts('Applying changes...', 'info');
+    showToasts('Updating credentials and settings...', 'info');
     try {
       const payload: Partial<UserSettings> = {
+        aiProvider,
         modelId: selectedModel,
-        temperature: temperature,
-        defaultTemplate: defaultTemplate,
-        defaultExportFormat: defaultExportFormat,
+        temperature,
+        defaultTemplate,
+        defaultExportFormat,
         hasCompletedProfile: true
       };
 
-      // Only over-write API key if a non-empty string is provided in input
-      if (groqKeyInput.trim() !== '') {
-        payload.groqApiKey = groqKeyInput.trim();
-      }
+      if (keysInput.groq.trim()) payload.groqApiKey = keysInput.groq.trim();
+      if (keysInput.gemini.trim()) payload.geminiApiKey = keysInput.gemini.trim();
+      if (keysInput.openai.trim()) payload.openaiApiKey = keysInput.openai.trim();
+      if (keysInput.openrouter.trim()) payload.openRouterApiKey = keysInput.openrouter.trim();
       
       await saveUserSettings(user.uid, payload);
       
-      // Update local state securely
       setSettings(prev => prev ? { ...prev, ...payload } : (payload as UserSettings));
-      if (groqKeyInput.trim() !== '') {
-        setHasApiKeySet(true);
-        setGroqKeyInput(''); // Reset visible input
-      }
-
-      // Synchronize to localStorage securely
-      localStorage.setItem('forge_user_settings', JSON.stringify({
-        modelId: selectedModel,
-        temperature: temperature,
-        defaultTemplate: defaultTemplate,
-        defaultExportFormat: defaultExportFormat
-      }));
+      setKeysInput({ groq: '', gemini: '', openai: '', openrouter: '' });
       
-      showToasts('Settings saved successfully and local environment synchronized.', 'success');
+      showToasts('Settings and API keys secured successfully.', 'success');
       onKeyConfigured();
     } catch (err) {
-      showToasts('Failure synchronizing settings database.', 'error');
+      showToasts('Failed to save settings.', 'error');
     } finally {
       setLoading(false);
     }
@@ -317,40 +313,120 @@ export default function Settings({ user, showToasts, onKeyConfigured }: Settings
                 <div className="space-y-6">
                   <div className="space-y-1">
                     <h3 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider">AI Intelligent Orchestration</h3>
-                    <p className="text-xs text-gray-500">Configure secure connections directly to fast private LLM models.</p>
+                    <p className="text-xs text-gray-500">Securely connect your own AI keys for enhanced resume intelligence.</p>
                   </div>
 
-                  <div className="p-4 rounded-2xl bg-zinc-50/50 dark:bg-zinc-950/20 border border-zinc-150 dark:border-zinc-850/80 space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-5 rounded-2xl bg-zinc-50/50 dark:bg-zinc-950/20 border border-zinc-200 dark:border-zinc-800 space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">AI provider</label>
+                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Active Provider</label>
                         <select
-                          value={provider}
-                          onChange={e => setProvider(e.target.value)}
-                          className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:border-indigo-500 outline-none text-xs font-mono font-bold text-zinc-700 dark:text-zinc-300"
+                          value={aiProvider}
+                          onChange={e => {
+                            const val = e.target.value as UserSettings['aiProvider'];
+                            setAiProvider(val);
+                            setSelectedModel(getDefaultModel(val));
+                          }}
+                          className="w-full px-4 py-3 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-bold text-zinc-800 dark:text-zinc-200"
                         >
-                          <option value="Groq">Groq (Ultra High-Speed Inference)</option>
+                          <option value="Groq">Groq (Instant Speed)</option>
+                          <option value="Gemini">Google Gemini</option>
+                          <option value="OpenAI">OpenAI (GPT-4o)</option>
+                          <option value="OpenRouter">OpenRouter (Unified)</option>
                         </select>
                       </div>
 
                       <div className="space-y-1.5">
-                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Model engine selection</label>
+                        <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Preferred Model</label>
                         <select
                           value={selectedModel}
                           onChange={e => setSelectedModel(e.target.value)}
-                          className="w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:border-indigo-500 outline-none text-xs font-mono font-bold text-zinc-700 dark:text-zinc-300"
+                          className="w-full px-4 py-3 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-mono font-bold text-zinc-800 dark:text-zinc-200"
                         >
-                          <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Recommended - High Accuracy)</option>
-                          <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Fastest Response Time)</option>
-                          <option value="llama3-70b-8192">llama3-70b-8192 (Traditional Corporate Focus)</option>
-                          <option value="llama3-8b-8192">llama3-8b-8192 (Lightweight Generalist)</option>
+                          {aiProvider === 'Groq' && (
+                            <>
+                              <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
+                              <option value="llama-3.1-8b-instant">llama-3.1-8b-instant</option>
+                            </>
+                          )}
+                          {aiProvider === 'Gemini' && (
+                            <>
+                              <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                              <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                            </>
+                          )}
+                          {aiProvider === 'OpenAI' && (
+                            <>
+                              <option value="gpt-4o-mini">gpt-4o-mini</option>
+                              <option value="gpt-4o">gpt-4o</option>
+                            </>
+                          )}
+                          {aiProvider === 'OpenRouter' && (
+                            <>
+                              <option value="anthropic/claude-3-haiku">claude-3-haiku</option>
+                              <option value="meta-llama/llama-3-70b-instruct">llama-3-70b</option>
+                            </>
+                          )}
                         </select>
                       </div>
+                    </div>
 
-                      <div className="sm:col-span-2 space-y-1.5">
-                        <div className="flex justify-between items-baseline">
-                          <label className="text-[10px] font-bold text-gray-400 tracking-widest uppercase">Target Temperature ({temperature})</label>
-                          <span className="text-[9px] text-zinc-400 font-mono">0.0 (Deterministic) - 1.2 (Highly Creative)</span>
+                    <div className="space-y-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+                      <h4 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest">API Key Management</h4>
+                      
+                      <div className="space-y-4">
+                        {(['Groq', 'Gemini', 'OpenAI', 'OpenRouter'] as const).map(p => {
+                          const keyType = p.toLowerCase();
+                          const isConfigured = !!(settings?.[`${keyType}ApiKey` as keyof UserSettings]);
+                          const isTesting = testingProviders[p];
+                          
+                          return (
+                            <div key={p} className="flex flex-col gap-2 p-3 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+                              <div className="flex justify-between items-center px-1">
+                                <span className="text-[11px] font-bold text-zinc-800 dark:text-zinc-100">{p}</span>
+                                <div className="flex items-center gap-3">
+                                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                                    isConfigured ? 'bg-emerald-500/10 text-emerald-500' : 'bg-zinc-500/10 text-zinc-500'
+                                  }`}>
+                                    {isConfigured ? 'Status: Active' : 'Status: Not Configured'}
+                                  </span>
+                                  <button
+                                    onClick={() => handleTestConnection(p)}
+                                    disabled={isTesting}
+                                    className="text-[9px] font-bold text-indigo-500 hover:text-indigo-400 disabled:opacity-50 flex items-center gap-1"
+                                  >
+                                    {isTesting ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <RefreshCw className="h-2.5 w-2.5" />}
+                                    Verify
+                                  </button>
+                                </div>
+                              </div>
+                              
+                              <div className="relative">
+                                <input
+                                  type={showKeys[p] ? 'text' : 'password'}
+                                  value={keysInput[keyType as keyof typeof keysInput]}
+                                  onChange={e => setKeysInput(prev => ({ ...prev, [keyType]: e.target.value }))}
+                                  placeholder={isConfigured ? '••••••••••••••••' : `Enter ${p} API Key`}
+                                  className="w-full pl-3 pr-10 py-2.5 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-xs font-mono outline-none focus:border-indigo-500"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setShowKeys(prev => ({ ...prev, [p]: !prev[p] }))}
+                                  className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200"
+                                >
+                                  {showKeys[p] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 pt-2">
+                       <div className="flex justify-between items-baseline">
+                          <label className="text-[10px] font-bold text-zinc-500 tracking-widest uppercase">Target Temperature ({temperature})</label>
+                          <span className="text-[9px] text-zinc-400 font-mono">Precision (0.0) ↔ Creative (1.2)</span>
                         </div>
                         <input
                           type="range"
@@ -361,49 +437,6 @@ export default function Settings({ user, showToasts, onKeyConfigured }: Settings
                           onChange={e => setTemperature(parseFloat(e.target.value))}
                           className="w-full accent-indigo-600 mt-2 bg-zinc-200 dark:bg-zinc-800 rounded h-1.5"
                         />
-                      </div>
-                    </div>
-
-                    {/* API Key paste action - SECURED AND HIDDEN */}
-                    <div className="mt-4 pt-4 border-t border-zinc-150 dark:border-zinc-850 space-y-2">
-                      <div className="flex justify-between items-center">
-                        <label className="text-[10px] font-black uppercase tracking-widest text-[#845ef7]" id="apiKeyInputLabel">Update API authentication key</label>
-                        <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
-                          hasApiKeySet ? 'bg-emerald-50 text-emerald-500 border border-emerald-505/20' : 'bg-amber-50 text-amber-500 border border-amber-505/20'
-                        }`}>
-                          {hasApiKeySet ? 'Credentials Configured ✔️' : 'Missing Credentials ⚠️'}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-zinc-500">Provide your secret token to update saved credential metrics. Current saved token values are fully hidden for privacy.</p>
-                      
-                      <div className="relative mt-2">
-                        <input
-                          type={showKey ? 'text' : 'password'}
-                          value={groqKeyInput}
-                          onChange={e => setGroqKeyInput(e.target.value)}
-                          placeholder={hasApiKeySet ? "Paste brand new API key to update (stored value is fully private)" : "gsk_xxxxxxxxxxxxxxxxxxx"}
-                          className="w-full pl-4 pr-11 py-3 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl focus:border-indigo-500 outline-none text-sm dark:text-white font-mono"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowKey(!showKey)}
-                          className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white"
-                        >
-                          {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2 pt-2">
-                      <button
-                        onClick={handleTestConnection}
-                        disabled={testingConnection}
-                        id="test-ai-connection-btn"
-                        className="px-3.5 py-2 rounded-xl bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200 text-xs font-bold uppercase tracking-wider transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                      >
-                        {testingConnection ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3 text-indigo-500" />}
-                        <span>Test AI connection</span>
-                      </button>
                     </div>
                   </div>
                 </div>

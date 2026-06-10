@@ -145,6 +145,7 @@ export async function syncUserProfile(user: FirebaseUser) {
       const uSettings: UserSettings = {
         uid: user.uid,
         email: user.email || '',
+        aiProvider: 'Groq',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };

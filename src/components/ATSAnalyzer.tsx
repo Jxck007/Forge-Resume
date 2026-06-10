@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ResumeData, AtsReport, ProfileData } from '../types';
+import { ResumeData, AtsReport, ProfileData, UserSettings } from '../types';
 import { aiDeepAnalyzeAtsWithGroq } from '../services/groq';
 import { saveAtsReport, fetchUserAtsReports } from '../services/firebase';
 import { validateResumeText, parseResumeTextLocally, analyzeAtsLocally, LocalAtsResult } from '../utils/atsEngine';
@@ -48,7 +48,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs
 interface ATSAnalyzerProps {
   resumes: ResumeData[];
   userUid: string;
-  groqKey?: string | null;
+  settings: UserSettings;
   showToasts: (msg: string, type: 'success' | 'error' | 'info') => void;
   activeResumeId?: string | null;
 }
@@ -59,7 +59,7 @@ type ProgressStep = 'idle' | 'reading' | 'ocr' | 'validating' | 'parsing' | 'sco
 export default function ATSAnalyzer({
   resumes,
   userUid,
-  groqKey,
+  settings,
   showToasts,
   activeResumeId,
 }: ATSAnalyzerProps) {
@@ -302,28 +302,26 @@ export default function ATSAnalyzer({
 
       if (isCancelledRef.current) return;
 
-      // 4. GROQ DEEP AI ENRICHMENT
+      // 4. DEEP AI ENRICHMENT
       setProgressStep('ai');
       setProgressStatusMsg('Generating deep recommendations via AI engine...');
       
       let aiResponse: any = null;
-      if (groqKey) {
-        try {
-          aiResponse = await aiDeepAnalyzeAtsWithGroq(
-            groqKey,
-            parsedResume,
-            jobDescription,
-            {
-              score: localResult.atsScore,
-              matchScore: localResult.matchScore,
-              keywordCoverage: localResult.keywordCoverage,
-              missingSkills: localResult.missingSkills,
-              missingKeywords: localResult.missingKeywords
-            }
-          );
-        } catch (aiErr) {
-          console.error('Groq connection error, preparing robust local mock response:', aiErr);
-        }
+      try {
+        aiResponse = await aiDeepAnalyzeAtsWithGroq(
+          settings,
+          parsedResume,
+          jobDescription,
+          {
+            score: localResult.atsScore,
+            matchScore: localResult.matchScore,
+            keywordCoverage: localResult.keywordCoverage,
+            missingSkills: localResult.missingSkills,
+            missingKeywords: localResult.missingKeywords
+          }
+        );
+      } catch (aiErr) {
+        console.error('AI connection error, preparing local fallback:', aiErr);
       }
 
       // If groq API was skipped or failed, fallback to local metrics formatted cleanly
@@ -347,8 +345,11 @@ export default function ATSAnalyzer({
           ],
           atsOptimizationAdvice: 'Review alignment scoring. Optimize the visual content hierarchy using a single column, highly-readable standard ATS template with specific titles.',
           rewriteRecommendations: [
-            'BEFORE: "Responsible for coding frontend screens and handling UI requests."\nAFTER: "Pioneered interactive UI interfaces using React & TypeScript, boosting site interaction index by 24%."',
-            'BEFORE: "Worked on Postgres storage optimizations."\nAFTER: "Refined database query pipelines using PostgreSQL, reducing load lags by 400ms across transaction charts."'
+            {
+              original: "Responsible for coding frontend screens and handling UI requests.",
+              optimized: "Pioneered interactive UI interfaces using React & TypeScript, boosting site interaction index by 24%.",
+              explanation: "Uses strong action verbs and quantifiable metrics."
+            }
           ]
         };
       }
@@ -1063,36 +1064,43 @@ export default function ATSAnalyzer({
               </div>
 
               {/* REWRITE SUGGESTIONS - BEFORE & AFTER SCREEN */}
-              {aiReport.rewriteRecommendations && aiReport.rewriteRecommendations.length > 0 && (
+              {aiReport.rewriteRecommendations && aiReport.rewriteRecommendations.length > 0 ? (
                 <div className="rounded-3xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950 p-6 shadow-xl">
                   <h3 className="text-xs font-bold text-gray-450 uppercase tracking-widest mb-4 flex items-center gap-2">
                     <Layers className="w-4 h-4 text-indigo-500" />
                     <span>Real-time Rewrite Recommendations</span>
                   </h3>
                   <div className="space-y-5">
-                    {aiReport.rewriteRecommendations.map((rw: string, idx: number) => {
-                      const parts = rw.split('\n');
-                      const beforeText = parts.find(p => p.toLowerCase().includes('before:')) || 'Before edit description';
-                      const afterText = parts.find(p => p.toLowerCase().includes('after:')) || 'Optimized rewrite';
-                      
+                    {aiReport.rewriteRecommendations.map((rw: any, idx: number) => {
                       return (
                         <div key={idx} className="border border-gray-100 dark:border-gray-850 rounded-2xl overflow-hidden shadow-sm">
                           <div className="grid grid-cols-1 md:grid-cols-2 text-xs">
                             {/* Before panel */}
                             <div className="p-4 bg-gray-50/70 dark:bg-gray-900/30 border-r border-gray-100 dark:border-gray-850">
                               <span className="bg-rose-50 dark:bg-rose-950/20 text-rose-600 text-[9px] font-extrabold px-2 py-0.5 rounded uppercase tracking-wider block w-fit mb-2">Original phrasing</span>
-                              <p className="text-gray-500 line-through leading-relaxed">{beforeText.replace(/before:\s*/i, '')}</p>
+                              <p className="text-gray-500 line-through leading-relaxed">{rw.original || 'Original text'}</p>
                             </div>
                             {/* After panel */}
                             <div className="p-4 bg-white dark:bg-gray-950">
                               <span className="bg-emerald-50 dark:bg-emerald-950/20 text-emerald-600 text-[9px] font-extrabold px-2 py-0.5 rounded uppercase tracking-wider block w-fit mb-2">ATS optimized wording</span>
-                              <p className="text-gray-800 dark:text-gray-200 font-bold leading-relaxed">{afterText.replace(/after:\s*/i, '')}</p>
+                              <p className="text-gray-800 dark:text-gray-200 font-bold leading-relaxed">{rw.optimized || 'Improved text'}</p>
                             </div>
                           </div>
+                          {rw.explanation && (
+                            <div className="px-4 py-2 bg-indigo-50/30 dark:bg-indigo-950/20 border-t border-gray-100 dark:border-gray-850">
+                              <p className="text-[10px] text-zinc-500 italic">
+                                <strong>Rationale:</strong> {rw.explanation}
+                              </p>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
                   </div>
+                </div>
+              ) : (
+                <div className="rounded-3xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950 p-8 text-center shadow-xl">
+                  <p className="text-sm text-gray-500 italic font-medium">No significant ATS improvement needed.</p>
                 </div>
               )}
             </div>

@@ -1,6 +1,6 @@
-import React from 'react';
-import { ResumeData, TemplateId } from '../types';
-import { Printer, Download, Eye, FileDown } from 'lucide-react';
+import React, { useState } from 'react';
+import { ResumeData, TemplateId, CustomSection } from '../types';
+import { Printer, Download, Eye, FileDown, AlertTriangle, X } from 'lucide-react';
 import html2pdf from 'html2pdf.js';
 
 interface ResumePreviewProps {
@@ -16,6 +16,8 @@ export default function ResumePreview({
   onTemplateChange,
   showToasts,
 }: ResumePreviewProps) {
+  const [exportError, setExportError] = useState<{ message: string; stack?: string } | null>(null);
+
   const personalDetails = resume?.personalDetails || { fullName: '', professionalTitle: '', email: '', phone: '', location: '', linkedin: '', github: '', website: '', profilePhoto: '' };
   const summary = resume?.summary || '';
   const education = resume?.education || [];
@@ -38,24 +40,131 @@ export default function ResumePreview({
   };
 
   const handleDownloadPDF = () => {
+    setExportError(null);
     const element = document.getElementById('resume-live-print-view');
-    if (!element) return;
+    if (!element) {
+      const msg = 'Element #resume-live-print-view not found in DOM.';
+      console.error(msg);
+      setExportError({ message: msg });
+      showToasts(msg, 'error');
+      return;
+    }
+    
+    // DIAGNOSTIC LOGGING
+    console.group('PDF Export Diagnostics');
+    console.log('Timestamp:', new Date().toISOString());
+    console.log('Template ID:', selectedTemplate);
+    console.log('Resume Data:', resume);
+    console.log('Profile Image State:', personalDetails.profilePhoto ? 'Present (Base64 or URL)' : 'Missing');
+    console.log('Custom Sections State:', (resume.customSections || []).length > 0 ? `${resume.customSections.length} items` : 'Empty');
+    console.log('Internship Section State:', (resume.internships || []).length > 0 ? `${resume.internships.length} items` : 'Empty');
+    console.groupEnd();
     
     showToasts('Downloading PDF using html2pdf...', 'info');
 
     const opt = {
       margin:       [0, 0, 0, 0] as [number, number, number, number],
-      filename:     `${personalDetails.fullName ? personalDetails.fullName.replace(/\s+/g, '_') : 'Resume'}_Document.pdf`,
+      filename:     `${personalDetails.fullName ? personalDetails.fullName.replace(/[^a-z0-9]/gi, '_') : 'Resume'}_Document.pdf`,
       image:        { type: 'jpeg' as 'jpeg', quality: 0.98 },
-      html2canvas:  { scale: 2, useCORS: true, logging: false },
+      html2canvas:  { 
+        scale: 2, 
+        useCORS: true, 
+        logging: true,
+        allowTaint: false,
+        scrollY: 0,
+        windowWidth: 1000,
+        onclone: (clonedDoc: Document) => {
+          // FIX: html2canvas does not support oklch() colors (Tailwind v4 default)
+          // We must traverse the cloned DOM and convert any oklch colors to rgb
+          const elements = clonedDoc.getElementsByTagName('*');
+          const tempDiv = clonedDoc.createElement('div');
+          clonedDoc.body.appendChild(tempDiv);
+
+          for (let i = 0; i < elements.length; i++) {
+            const el = elements[i] as HTMLElement;
+            const style = window.getComputedStyle(el);
+            
+            // Properties to check for colors
+            const colorProps = [
+              'color', 
+              'backgroundColor', 
+              'borderColor', 
+              'borderTopColor', 
+              'borderRightColor', 
+              'borderBottomColor', 
+              'borderLeftColor', 
+              'outlineColor',
+              'fill',
+              'stroke',
+              'boxShadow',
+              'textShadow'
+            ];
+            
+            colorProps.forEach(prop => {
+              const value = (el.style as any)[prop] || style.getPropertyValue(prop);
+              if (value && (value.includes('oklch') || value.includes('var('))) {
+                try {
+                  // Use the browser to resolve oklch or CSS variables to rgb
+                  tempDiv.style.color = value;
+                  const converted = window.getComputedStyle(tempDiv).color;
+                  if (converted && !converted.includes('oklch') && !converted.includes('var(')) {
+                    el.style.setProperty(prop, converted, 'important');
+                  }
+                } catch (e) {
+                  // Silently fail for complex values like multiple box-shadows or gradients
+                }
+              }
+            });
+          }
+          clonedDoc.body.removeChild(tempDiv);
+        }
+      },
       jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' as 'portrait' }
     };
 
-    html2pdf().set(opt).from(element).save().then(() => {
-      showToasts('PDF downloaded successfully!', 'success');
-    }).catch(() => {
-      showToasts('PDF generation failed.', 'error');
-    });
+    console.log('PDF Export Options:', opt);
+
+    try {
+      if (typeof html2pdf !== 'function') {
+        throw new Error('html2pdf library is not correctly loaded as a function. Check imports.');
+      }
+
+      const pdfGenerator = html2pdf().set(opt).from(element);
+      
+      console.log('PDF Generator initialized:', pdfGenerator);
+
+      // Deep diagnostics on element
+      const images = Array.from(element.querySelectorAll('img'));
+      console.log(`Found ${images.length} images in resume. Checking for load status and CORS...`);
+      images.forEach((img, idx) => {
+        console.log(`Image ${idx}: src=${img.src.substring(0, 50)}..., complete=${img.complete}, naturalWidth=${img.naturalWidth}`);
+        if (img.src.startsWith('http') && !img.crossOrigin) {
+          console.warn(`Image ${idx} is a remote URL but missing crossOrigin attribute. This may fail PDF generation.`);
+        }
+      });
+
+      pdfGenerator.save()
+        .then(() => {
+          console.log('PDF generation promise resolved successfully.');
+          showToasts('PDF downloaded successfully!', 'success');
+        })
+        .catch((err: any) => {
+          console.error('html2pdf deep .catch error:', err);
+          const errorInfo = {
+            message: err?.message || 'The PDF generation engine encountered a critical error during canvas rendering or file saving.',
+            stack: err?.stack || 'Check browser console (under PDF Export Diagnostics) for deep trace.'
+          };
+          setExportError(errorInfo);
+          showToasts(`PDF generation failed: ${errorInfo.message}`, 'error');
+        });
+    } catch (err: any) {
+      console.error('html2pdf synchronous catch:', err);
+      setExportError({
+        message: err?.message || 'Synchronous failure in PDF generation',
+        stack: err?.stack
+      });
+      showToasts('PDF generation crashed.', 'error');
+    }
   };
 
   // Switch template templates instantly (12 layouts)
@@ -217,6 +326,32 @@ export default function ResumePreview({
 
   const isSectionVisible = (secId: string) => {
     return !hiddenSections.includes(secId);
+  };
+
+  const renderCustomSection = (templateId: TemplateId, section: CustomSection) => {
+    if (!section.items || section.items.length === 0) return null;
+
+    const theme = getTemplateTheme(templateId);
+
+    return (
+      <div key={section.id} className="space-y-3 pb-2 text-left avoid-break">
+        <h3 className={`text-xs font-bold uppercase tracking-wider ${theme.headingColor} border-b border-gray-100 pb-1`}>
+          {section.title}
+        </h3>
+        <div className="space-y-3">
+          {section.items.map(item => (
+            <div key={item.id} className="avoid-break text-left">
+              <div className="flex justify-between items-baseline flex-wrap">
+                <h4 className="text-xs font-bold text-gray-900">{item.title}</h4>
+                {item.date && <span className="text-[10px] text-gray-500 font-medium">{item.date}</span>}
+              </div>
+              {item.subtitle && <p className="text-[10px] text-gray-500 italic mt-0.5">{item.subtitle}</p>}
+              <p className="text-[10.5px] text-gray-600 mt-1.5 whitespace-pre-line leading-relaxed">{item.description}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   const renderInternships = (templateId: TemplateId, list: any[]) => {
@@ -471,7 +606,7 @@ export default function ResumePreview({
   };
 
   // ==========================================
-  // TEMPLATE 1: MODERN (Modern Card Layout)
+  // TEMPLATE 1: MODERN
   // ==========================================
   const renderModernLayout = () => {
     return (
@@ -485,6 +620,7 @@ export default function ResumePreview({
                 alt="ProfilePhoto"
                 className="h-16 w-16 rounded-xl object-cover border-2 border-indigo-100 shrink-0" 
                 referrerPolicy="no-referrer"
+                crossOrigin="anonymous"
               />
             )}
             <div>
@@ -520,6 +656,12 @@ export default function ResumePreview({
         <div className="space-y-6">
           {sectionOrder.map(secId => {
             if (!isSectionVisible(secId)) return null;
+
+            // Handle Custom Sections
+            const customSec = customSections.find(cs => cs.id === secId);
+            if (customSec) {
+              return renderCustomSection(selectedTemplate, customSec);
+            }
 
             if (secId === 'internships' && (resume.internships || []).length > 0) {
               return renderInternships(selectedTemplate, resume.internships || []);
@@ -670,7 +812,7 @@ export default function ResumePreview({
   };
 
   // ==========================================
-  // TEMPLATE 2: MINIMAL (Minimal Single Column)
+  // TEMPLATE 2: MINIMAL
   // ==========================================
   const renderMinimalLayout = () => {
     return (
@@ -704,6 +846,12 @@ export default function ResumePreview({
         <div className="space-y-6">
           {sectionOrder.map(secId => {
             if (!isSectionVisible(secId)) return null;
+
+            // Handle Custom Sections
+            const customSec = customSections.find(cs => cs.id === secId);
+            if (customSec) {
+              return renderCustomSection(selectedTemplate, customSec);
+            }
 
             if (secId === 'internships' && (resume.internships || []).length > 0) {
               return renderInternships(selectedTemplate, resume.internships || []);
@@ -801,7 +949,7 @@ export default function ResumePreview({
   };
 
   // ==========================================
-  // TEMPLATE 3: CORPORATE (Standard Left Sidebar - Two Column)
+  // TEMPLATE 3: CORPORATE
   // ==========================================
   const renderCorporateLayout = () => {
     return (
@@ -815,6 +963,7 @@ export default function ResumePreview({
               alt="ProfilePhoto"
               className="h-24 w-24 rounded-full object-cover border-4 border-white shadow-sm mx-auto shrink-0 mb-2" 
               referrerPolicy="no-referrer"
+              crossOrigin="anonymous"
             />
           )}
 
@@ -1219,7 +1368,7 @@ export default function ResumePreview({
   };
 
   // ==========================================
-  // TEMPLATE 6: ATS FRIENDLY (Pure Standard)
+  // TEMPLATE 6: ATS FRIENDLY
   // ==========================================
   const renderAtsFriendlyLayout = () => {
     return (
@@ -1254,6 +1403,12 @@ export default function ResumePreview({
         <div className="space-y-4 font-sans">
           {sectionOrder.map(secId => {
             if (!isSectionVisible(secId)) return null;
+
+            // Handle Custom Sections
+            const customSec = customSections.find(cs => cs.id === secId);
+            if (customSec) {
+              return renderCustomSection(selectedTemplate, customSec);
+            }
 
             if (secId === 'internships' && (resume.internships || []).length > 0) {
               return renderInternships(selectedTemplate, resume.internships || []);
@@ -1974,6 +2129,33 @@ export default function ResumePreview({
     <div className="flex flex-col h-full bg-gray-50/50  rounded-2xl border border-gray-150  p-4" id="resume-preview-panel">
       {/* Template Selector Horizontal Bar */}
       <div className="no-print mb-4 flex flex-col gap-3 pb-4 border-b border-gray-150 ">
+        
+        {/* Error Diagnostics UI */}
+        {exportError && (
+          <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-rose-800 shadow-sm animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2 font-bold text-sm">
+                <AlertTriangle className="h-4 w-4" />
+                <span>PDF Export Diagnostic Report</span>
+              </div>
+              <button 
+                onClick={() => setExportError(null)}
+                className="p-1 hover:bg-rose-100 rounded-full transition"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-2 text-xs">
+              <p><strong>Error Message:</strong> {exportError.message}</p>
+              <div className="bg-rose-100/50 p-2 rounded border border-rose-200 overflow-auto max-h-32">
+                <p className="font-mono whitespace-pre-wrap"><strong>Stack Trace:</strong> {exportError.stack || 'Unspecified'}</p>
+              </div>
+              <p><strong>Component:</strong> ResumePreview</p>
+              <p className="text-[10px] text-rose-600 italic">Check the browser console for full resume data snapshot and html2canvas logs.</p>
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <span className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
             <Eye className="h-4 w-4 text-indigo-500" />

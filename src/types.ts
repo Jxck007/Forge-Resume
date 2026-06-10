@@ -108,7 +108,11 @@ export interface ResumeData {
 export interface UserSettings {
   uid: string;
   email: string;
+  aiProvider: 'Groq' | 'Gemini' | 'OpenAI' | 'OpenRouter';
   groqApiKey?: string;
+  geminiApiKey?: string;
+  openaiApiKey?: string;
+  openRouterApiKey?: string;
   hasCompletedProfile?: boolean;
   modelId?: string;
   temperature?: number;
