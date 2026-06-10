@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isNearServerTime(timeStr) {
+      return timeStr is string;
+    }
+
+    // 1. Users validation
+    function isValidUser(data) {
+      return data.uid is string && data.uid == request.auth.uid
+        && data.email is string && data.email.size() <= 256
+        && (!('groqApiKey' in data) || (data.groqApiKey is string && data.groqApiKey.size() <= 512));
+    }
+
+    // 2. Resume validation
+    function isValidResume(data) {
+      return data.id is string && data.id.size() <= 128
+        && data.userId is string && data.userId == request.auth.uid
+        && data.title is string && data.title.size() <= 256
+        && data.templateId is string && data.templateId.size() <= 64
+        && data.isArchived is bool;
+    }
+
+    // 3. ATS Report validation
+    function isValidAtsReport(data) {
+      return data.id is string && data.id.size() <= 128
+        && data.resumeId is string && data.resumeId.size() <= 128
+        && data.userId is string && data.userId == request.auth.uid
+        && data.jobDescription is string && data.jobDescription.size() <= 50000
+        && data.score is number && data.score >= 0 && data.score <= 100;
+    }
+
+    // Rules matching
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(incoming()) && isNearServerTime(incoming().createdAt);
+      allow update: if isOwner(userId) && isValidUser(incoming()) && isNearServerTime(incoming().updatedAt) && incoming().createdAt == existing().createdAt;
+      allow delete: if isOwner(userId);
+    }
+
+    match /resumes/{resumeId} {
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidResume(incoming()) && incoming().userId == request.auth.uid && isNearServerTime(incoming().createdAt);
+      allow update: if isSignedIn() && existing().userId == request.auth.uid && isValidResume(incoming()) && incoming().userId == request.auth.uid && isNearServerTime(incoming().updatedAt) && incoming().createdAt == existing().createdAt;
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    match /atsReports/{reportId} {
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidAtsReport(incoming()) && incoming().userId == request.auth.uid && isNearServerTime(incoming().createdAt);
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+  }
+}
