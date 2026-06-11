@@ -1,3 +1,24 @@
+export const TEMPLATE_IDS = [
+  'modern',
+  'minimal',
+  'corporate',
+  'executive',
+  'creative',
+  'atsFriendly',
+  'softwareEngineer',
+  'student',
+  'startup',
+  'designer',
+  'dataAnalyst',
+  'classic',
+] as const;
+
+export type TemplateId = (typeof TEMPLATE_IDS)[number];
+
+export function isTemplateId(value: unknown): value is TemplateId {
+  return typeof value === 'string' && TEMPLATE_IDS.includes(value as TemplateId);
+}
+
 export interface PersonalDetails {
   fullName: string;
   professionalTitle: string;
@@ -85,7 +106,8 @@ export interface ResumeData {
   id: string;
   userId: string;
   title: string;
-  templateId: string;
+  templateId: TemplateId;
+  useProfilePhoto: boolean;
   personalDetails: PersonalDetails;
   summary: string;
   education: EducationEntry[];
@@ -126,15 +148,17 @@ export interface ProfileData {
   uid: string;
   personalDetails: PersonalDetails;
   summary: string;
+  careerObjective: string;
   education: EducationEntry[];
   experience: ExperienceEntry[];
-  internships?: InternshipEntry[];
+  internships: InternshipEntry[];
   projects: ProjectEntry[];
   skills: SkillCategory;
   certifications: CertificationEntry[];
   achievements: string[];
   volunteering: ExperienceEntry[];
   languages: string[];
+  customSections: CustomSection[];
   updatedAt: string;
 }
 
@@ -160,17 +184,3 @@ export interface AtsReport {
   weaknesses: string[];
   createdAt: string;
 }
-
-export type TemplateId =
-  | 'modern'
-  | 'minimal'
-  | 'corporate'
-  | 'executive'
-  | 'creative'
-  | 'atsFriendly'
-  | 'softwareEngineer'
-  | 'student'
-  | 'startup'
-  | 'designer'
-  | 'dataAnalyst'
-  | 'classic';

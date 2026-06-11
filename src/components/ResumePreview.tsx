@@ -1,22 +1,29 @@
 import React, { useState } from 'react';
 import { ResumeData, TemplateId, CustomSection } from '../types';
-import { Printer, Download, Eye, FileDown, AlertTriangle, X } from 'lucide-react';
-import html2pdf from 'html2pdf.js';
+import { Printer, Eye, FileDown, AlertTriangle, X } from 'lucide-react';
+import html2canvas from 'html2canvas-pro';
+import { jsPDF } from 'jspdf';
 
 interface ResumePreviewProps {
   resume: ResumeData;
   selectedTemplate: TemplateId;
+  profilePhoto?: string;
   onTemplateChange: (templateId: TemplateId) => void;
+  onProfilePhotoUsageChange: (useProfilePhoto: boolean) => void;
   showToasts: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
 export default function ResumePreview({
   resume,
   selectedTemplate,
+  profilePhoto,
   onTemplateChange,
+  onProfilePhotoUsageChange,
   showToasts,
 }: ResumePreviewProps) {
   const [exportError, setExportError] = useState<{ message: string; stack?: string } | null>(null);
+  const [exportMode, setExportMode] = useState<'single' | 'multi'>('single');
+  const [isExporting, setIsExporting] = useState(false);
 
   const personalDetails = resume?.personalDetails || { fullName: '', professionalTitle: '', email: '', phone: '', location: '', linkedin: '', github: '', website: '', profilePhoto: '' };
   const summary = resume?.summary || '';
@@ -29,9 +36,31 @@ export default function ResumePreview({
   const volunteering = resume?.volunteering || [];
   const languages = resume?.languages || [];
   const customSections = resume?.customSections || [];
-  const sectionOrder = resume?.sectionOrder || ['summary', 'experience', 'education', 'skills', 'projects', 'certifications', 'achievements', 'volunteering', 'languages'];
+  const sectionOrder = resume.sectionOrder;
   const hiddenSections = resume?.hiddenSections || [];
   const hasSkills = Object.values(skills).some(s => Array.isArray(s) && s.length > 0);
+  const profilePhotoSource = personalDetails.profilePhoto?.trim() || profilePhoto?.trim() || '';
+  const shouldUseProfilePhoto = resume.useProfilePhoto !== false && Boolean(profilePhotoSource);
+
+  const renderProfilePhoto = (className: string, alt = 'Profile photo') => {
+    if (!shouldUseProfilePhoto) return null;
+
+    return (
+      <img
+        src={profilePhotoSource}
+        alt={alt}
+        className={`object-cover object-center shrink-0 ${className}`}
+        referrerPolicy="no-referrer"
+        crossOrigin={/^https?:\/\//i.test(profilePhotoSource) ? 'anonymous' : undefined}
+        loading="eager"
+        decoding="sync"
+        draggable={false}
+        onError={event => {
+          event.currentTarget.style.display = 'none';
+        }}
+      />
+    );
+  };
 
   const handlePrint = () => {
     // Show a helpful print instruction toast
@@ -39,7 +68,8 @@ export default function ResumePreview({
     window.print();
   };
 
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
+    if (isExporting) return;
     setExportError(null);
     const element = document.getElementById('resume-live-print-view');
     if (!element) {
@@ -55,115 +85,174 @@ export default function ResumePreview({
     console.log('Timestamp:', new Date().toISOString());
     console.log('Template ID:', selectedTemplate);
     console.log('Resume Data:', resume);
-    console.log('Profile Image State:', personalDetails.profilePhoto ? 'Present (Base64 or URL)' : 'Missing');
+    console.log(
+      'Profile Image State:',
+      !profilePhotoSource ? 'Missing' : shouldUseProfilePhoto ? 'Enabled' : 'Disabled'
+    );
     console.log('Custom Sections State:', (resume.customSections || []).length > 0 ? `${resume.customSections.length} items` : 'Empty');
     console.log('Internship Section State:', (resume.internships || []).length > 0 ? `${resume.internships.length} items` : 'Empty');
     console.groupEnd();
     
-    showToasts('Downloading PDF using html2pdf...', 'info');
-
-    const opt = {
-      margin:       [0, 0, 0, 0] as [number, number, number, number],
-      filename:     `${personalDetails.fullName ? personalDetails.fullName.replace(/[^a-z0-9]/gi, '_') : 'Resume'}_Document.pdf`,
-      image:        { type: 'jpeg' as 'jpeg', quality: 0.98 },
-      html2canvas:  { 
-        scale: 2, 
-        useCORS: true, 
-        logging: true,
-        allowTaint: false,
-        scrollY: 0,
-        windowWidth: 1000,
-        onclone: (clonedDoc: Document) => {
-          // FIX: html2canvas does not support oklch() colors (Tailwind v4 default)
-          // We must traverse the cloned DOM and convert any oklch colors to rgb
-          const elements = clonedDoc.getElementsByTagName('*');
-          const tempDiv = clonedDoc.createElement('div');
-          clonedDoc.body.appendChild(tempDiv);
-
-          for (let i = 0; i < elements.length; i++) {
-            const el = elements[i] as HTMLElement;
-            const style = window.getComputedStyle(el);
-            
-            // Properties to check for colors
-            const colorProps = [
-              'color', 
-              'backgroundColor', 
-              'borderColor', 
-              'borderTopColor', 
-              'borderRightColor', 
-              'borderBottomColor', 
-              'borderLeftColor', 
-              'outlineColor',
-              'fill',
-              'stroke',
-              'boxShadow',
-              'textShadow'
-            ];
-            
-            colorProps.forEach(prop => {
-              const value = (el.style as any)[prop] || style.getPropertyValue(prop);
-              if (value && (value.includes('oklch') || value.includes('var('))) {
-                try {
-                  // Use the browser to resolve oklch or CSS variables to rgb
-                  tempDiv.style.color = value;
-                  const converted = window.getComputedStyle(tempDiv).color;
-                  if (converted && !converted.includes('oklch') && !converted.includes('var(')) {
-                    el.style.setProperty(prop, converted, 'important');
-                  }
-                } catch (e) {
-                  // Silently fail for complex values like multiple box-shadows or gradients
-                }
-              }
-            });
-          }
-          clonedDoc.body.removeChild(tempDiv);
-        }
-      },
-      jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' as 'portrait' }
-    };
-
-    console.log('PDF Export Options:', opt);
+    showToasts('Generating PDF...', 'info');
+    setIsExporting(true);
 
     try {
-      if (typeof html2pdf !== 'function') {
-        throw new Error('html2pdf library is not correctly loaded as a function. Check imports.');
+      const images = Array.from(element.querySelectorAll<HTMLImageElement>('img'));
+      await Promise.all(images.map(image => {
+        if (image.complete) {
+          return image.decode?.().catch(() => undefined) ?? Promise.resolve();
+        }
+
+        return new Promise<void>(resolve => {
+          image.addEventListener('load', () => resolve(), { once: true });
+          image.addEventListener('error', () => resolve(), { once: true });
+        });
+      }));
+
+      const rootRect = element.getBoundingClientRect();
+      const canvas = await html2canvas(element, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: false,
+        backgroundColor: '#ffffff',
+        logging: false,
+        scrollX: 0,
+        scrollY: 0,
+        windowWidth: element.scrollWidth,
+      });
+
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const imageData = canvas.toDataURL('image/jpeg', 0.98);
+      const canvasScaleX = canvas.width / element.scrollWidth;
+      const canvasScaleY = canvas.height / element.scrollHeight;
+      const links = Array.from(element.querySelectorAll<HTMLAnchorElement>('a[href]'))
+        .map(anchor => {
+          const rect = anchor.getBoundingClientRect();
+          return {
+            url: anchor.href,
+            x: (rect.left - rootRect.left) * canvasScaleX,
+            y: (rect.top - rootRect.top) * canvasScaleY,
+            width: rect.width * canvasScaleX,
+            height: rect.height * canvasScaleY,
+          };
+        })
+        .filter(link => link.url && link.width > 0 && link.height > 0);
+
+      if (exportMode === 'single') {
+        const margin = 18;
+        const availableWidth = pageWidth - margin * 2;
+        const availableHeight = pageHeight - margin * 2;
+        const scale = Math.min(availableWidth / canvas.width, availableHeight / canvas.height);
+        const renderedWidth = canvas.width * scale;
+        const renderedHeight = canvas.height * scale;
+        const offsetX = (pageWidth - renderedWidth) / 2;
+        const offsetY = margin;
+        pdf.addImage(imageData, 'JPEG', offsetX, offsetY, renderedWidth, renderedHeight);
+        links.forEach(link => {
+          pdf.link(
+            offsetX + link.x * scale,
+            offsetY + link.y * scale,
+            link.width * scale,
+            link.height * scale,
+            { url: link.url }
+          );
+        });
+      } else {
+        const sourcePageHeight = Math.floor(canvas.width * (pageHeight / pageWidth));
+        const protectedBlocks = Array.from(element.querySelectorAll<HTMLElement>('.avoid-break'))
+          .map(block => {
+            const rect = block.getBoundingClientRect();
+            return {
+              top: (rect.top - rootRect.top) * canvasScaleY,
+              bottom: (rect.bottom - rootRect.top) * canvasScaleY,
+            };
+          })
+          .filter(block => block.bottom > block.top);
+        const headingGroups = Array.from(element.querySelectorAll<HTMLElement>('h3, h4'))
+          .map(heading => {
+            const next = heading.nextElementSibling as HTMLElement | null;
+            const headingRect = heading.getBoundingClientRect();
+            const nextRect = next?.getBoundingClientRect();
+            return {
+              top: (headingRect.top - rootRect.top) * canvasScaleY,
+              bottom: ((nextRect?.bottom ?? headingRect.bottom) - rootRect.top) * canvasScaleY,
+            };
+          })
+          .filter(group => group.bottom > group.top);
+        protectedBlocks.push(...headingGroups);
+        let sourceY = 0;
+        let pageIndex = 0;
+
+        while (sourceY < canvas.height) {
+          const targetEnd = Math.min(sourceY + sourcePageHeight, canvas.height);
+          const crossingBlock = protectedBlocks
+            .filter(block =>
+              block.top > sourceY + sourcePageHeight * 0.2 &&
+              block.top < targetEnd &&
+              block.bottom > targetEnd
+            )
+            .sort((a, b) => a.top - b.top)[0];
+          const sliceEnd = crossingBlock ? crossingBlock.top : targetEnd;
+          const sliceHeight = Math.max(1, Math.floor(sliceEnd - sourceY));
+          const pageCanvas = document.createElement('canvas');
+          pageCanvas.width = canvas.width;
+          pageCanvas.height = sliceHeight;
+
+          const context = pageCanvas.getContext('2d');
+          if (!context) {
+            throw new Error('Unable to prepare the PDF page canvas.');
+          }
+
+          context.fillStyle = '#ffffff';
+          context.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+          context.drawImage(
+            canvas,
+            0,
+            sourceY,
+            canvas.width,
+            sliceHeight,
+            0,
+            0,
+            canvas.width,
+            sliceHeight
+          );
+
+          if (pageIndex > 0) pdf.addPage();
+          const renderedHeight = pageWidth * (sliceHeight / canvas.width);
+          pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.98), 'JPEG', 0, 0, pageWidth, renderedHeight);
+          const pageScale = pageWidth / canvas.width;
+          links
+            .filter(link => link.y < sourceY + sliceHeight && link.y + link.height > sourceY)
+            .forEach(link => {
+              pdf.link(
+                link.x * pageScale,
+                Math.max(0, link.y - sourceY) * pageScale,
+                link.width * pageScale,
+                link.height * pageScale,
+                { url: link.url }
+              );
+            });
+
+          sourceY += sliceHeight;
+          pageIndex += 1;
+        }
       }
 
-      const pdfGenerator = html2pdf().set(opt).from(element);
-      
-      console.log('PDF Generator initialized:', pdfGenerator);
-
-      // Deep diagnostics on element
-      const images = Array.from(element.querySelectorAll('img'));
-      console.log(`Found ${images.length} images in resume. Checking for load status and CORS...`);
-      images.forEach((img, idx) => {
-        console.log(`Image ${idx}: src=${img.src.substring(0, 50)}..., complete=${img.complete}, naturalWidth=${img.naturalWidth}`);
-        if (img.src.startsWith('http') && !img.crossOrigin) {
-          console.warn(`Image ${idx} is a remote URL but missing crossOrigin attribute. This may fail PDF generation.`);
-        }
-      });
-
-      pdfGenerator.save()
-        .then(() => {
-          console.log('PDF generation promise resolved successfully.');
-          showToasts('PDF downloaded successfully!', 'success');
-        })
-        .catch((err: any) => {
-          console.error('html2pdf deep .catch error:', err);
-          const errorInfo = {
-            message: err?.message || 'The PDF generation engine encountered a critical error during canvas rendering or file saving.',
-            stack: err?.stack || 'Check browser console (under PDF Export Diagnostics) for deep trace.'
-          };
-          setExportError(errorInfo);
-          showToasts(`PDF generation failed: ${errorInfo.message}`, 'error');
-        });
-    } catch (err: any) {
-      console.error('html2pdf synchronous catch:', err);
-      setExportError({
-        message: err?.message || 'Synchronous failure in PDF generation',
-        stack: err?.stack
-      });
-      showToasts('PDF generation crashed.', 'error');
+      const safeName = personalDetails.fullName
+        ? personalDetails.fullName.replace(/[^a-z0-9]/gi, '_')
+        : 'Resume';
+      pdf.save(`${safeName}_${exportMode === 'single' ? 'Single_Page' : 'Multi_Page'}.pdf`);
+      showToasts('PDF downloaded successfully!', 'success');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'PDF generation failed.';
+      const stack = err instanceof Error ? err.stack : undefined;
+      console.error('PDF export failed:', err);
+      setExportError({ message, stack });
+      showToasts(`PDF generation failed: ${message}`, 'error');
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -288,6 +377,30 @@ export default function ResumePreview({
 
   const themeConfig = getTemplateTheme(selectedTemplate);
 
+  const getTemplateButtonClass = (id: TemplateId, selected: boolean) => {
+    const base = 'px-2 py-2 rounded-lg text-[10px] font-bold border transition text-center cursor-pointer';
+    const palette: Record<TemplateId, string> = {
+      modern: 'border-indigo-200 bg-indigo-50 text-indigo-700 hover:border-indigo-400',
+      minimal: 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-400',
+      corporate: 'border-slate-300 bg-slate-100 text-slate-800 hover:border-slate-500',
+      executive: 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:border-emerald-400',
+      creative: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 hover:border-fuchsia-400',
+      atsFriendly: 'border-zinc-300 bg-white text-zinc-900 hover:border-zinc-500',
+      softwareEngineer: 'border-cyan-200 bg-slate-900 text-cyan-300 hover:border-cyan-400',
+      student: 'border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-400',
+      startup: 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-400',
+      designer: 'border-rose-200 bg-rose-50 text-rose-700 hover:border-rose-400',
+      dataAnalyst: 'border-teal-200 bg-teal-50 text-teal-700 hover:border-teal-400',
+      classic: 'border-stone-300 bg-stone-50 text-stone-700 hover:border-stone-500',
+    };
+
+    if (selected) {
+      return `${base} ring-2 ring-offset-1 shadow-sm ${palette[id]}`;
+    }
+
+    return `${base} border-gray-200/80 bg-white text-gray-600 hover:border-gray-300`;
+  };
+
   // Render Skill Badges beautifully based on templates
   const renderSkillBadges = (skillList: string[], type: TemplateId = selectedTemplate) => {
     if (!skillList || skillList.length === 0) return null;
@@ -326,6 +439,50 @@ export default function ResumePreview({
 
   const isSectionVisible = (secId: string) => {
     return !hiddenSections.includes(secId);
+  };
+
+  const normalizeUrl = (url: string) =>
+    /^https?:\/\//i.test(url) ? url : `https://${url}`;
+
+  const ResumeLink = ({
+    url,
+    label,
+    className = '',
+  }: {
+    url?: string;
+    label: string;
+    className?: string;
+  }) => {
+    if (!url?.trim()) return null;
+    return (
+      <a
+        href={normalizeUrl(url.trim())}
+        target="_blank"
+        rel="noreferrer"
+        className={`underline decoration-current underline-offset-2 ${className}`}
+      >
+        {label}
+      </a>
+    );
+  };
+
+  const renderContactLinks = (className = '') => {
+    const links = [
+      { url: personalDetails.website, label: 'Portfolio' },
+      { url: personalDetails.linkedin, label: 'LinkedIn' },
+      { url: personalDetails.github, label: 'GitHub' },
+    ].filter(link => link.url?.trim());
+
+    if (links.length === 0) return null;
+    return (
+      <div className={`flex flex-wrap gap-x-2 gap-y-1 ${className}`}>
+        {links.map(link => (
+          <React.Fragment key={link.label}>
+            <ResumeLink url={link.url} label={link.label} />
+          </React.Fragment>
+        ))}
+      </div>
+    );
   };
 
   const renderCustomSection = (templateId: TemplateId, section: CustomSection) => {
@@ -605,6 +762,166 @@ export default function ResumePreview({
     }
   };
 
+  const renderSupplementalSections = (handledSections: Set<string>) => {
+    const theme = getTemplateTheme(selectedTemplate);
+    const sectionIds = sectionOrder;
+    const headingClass = `text-xs font-bold uppercase tracking-wider ${theme.headingColor} border-b border-gray-200 pb-1`;
+
+    return sectionIds.map(sectionId => {
+      if (handledSections.has(sectionId) || !isSectionVisible(sectionId)) return null;
+
+      const customSection = customSections.find(section => section.id === sectionId);
+      if (customSection) return renderCustomSection(selectedTemplate, customSection);
+
+      if (sectionId === 'summary' && summary) {
+        return (
+          <section key={sectionId} className="avoid-break space-y-2 text-left">
+            <h3 className={headingClass}>Professional Summary</h3>
+            <p className="whitespace-pre-wrap text-[10.5px] leading-relaxed text-gray-700">{summary}</p>
+          </section>
+        );
+      }
+
+      if (sectionId === 'internships' && (resume.internships || []).length > 0) {
+        return <React.Fragment key={sectionId}>{renderInternships(selectedTemplate, resume.internships || [])}</React.Fragment>;
+      }
+
+      if (sectionId === 'experience' && experience.length > 0) {
+        return (
+          <section key={sectionId} className="space-y-3 text-left">
+            <h3 className={headingClass}>Professional Experience</h3>
+            {experience.map(entry => (
+              <article key={entry.id} className="avoid-break">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h4 className="text-xs font-bold text-gray-900">{entry.title} | {entry.company}</h4>
+                  <span className="text-[9.5px] font-semibold text-gray-500">{entry.startDate} - {entry.endDate}</span>
+                </div>
+                {entry.location && <p className="text-[9.5px] text-gray-500">{entry.location}</p>}
+                {entry.description && <p className="mt-1 whitespace-pre-line text-[10.5px] leading-relaxed text-gray-700">{entry.description}</p>}
+              </article>
+            ))}
+          </section>
+        );
+      }
+
+      if (sectionId === 'education' && education.length > 0) {
+        return (
+          <section key={sectionId} className="space-y-3 text-left">
+            <h3 className={headingClass}>Education</h3>
+            {education.map(entry => (
+              <article key={entry.id} className="avoid-break">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h4 className="text-xs font-bold text-gray-900">{entry.degree}</h4>
+                  <span className="text-[9.5px] font-semibold text-gray-500">{entry.startDate} - {entry.endDate}</span>
+                </div>
+                <p className="text-[10px] text-gray-600">{[entry.institution, entry.location].filter(Boolean).join(', ')}</p>
+                {entry.gpa && <p className="text-[9.5px] font-semibold text-gray-600">GPA: {entry.gpa}</p>}
+                {entry.description && <p className="mt-1 whitespace-pre-line text-[10.5px] text-gray-700">{entry.description}</p>}
+              </article>
+            ))}
+          </section>
+        );
+      }
+
+      if (sectionId === 'skills' && hasSkills) {
+        const skillRows = [
+          ['Programming Languages', skills.programmingLanguages],
+          ['Frameworks', skills.frameworks],
+          ['Tools', skills.tools],
+          ['Databases', skills.databases],
+          ['Soft Skills', skills.softSkills],
+        ] as const;
+        return (
+          <section key={sectionId} className="avoid-break space-y-2 text-left">
+            <h3 className={headingClass}>Skills</h3>
+            {skillRows.map(([label, values]) => values.length > 0 && (
+              <p key={label} className="text-[10.5px] text-gray-700">
+                <strong>{label}:</strong> {values.join(', ')}
+              </p>
+            ))}
+          </section>
+        );
+      }
+
+      if (sectionId === 'projects' && projects.length > 0) {
+        return (
+          <section key={sectionId} className="space-y-3 text-left">
+            <h3 className={headingClass}>Projects</h3>
+            {projects.map(project => (
+              <article key={project.id} className="avoid-break">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h4 className="text-xs font-bold text-gray-900">{project.name}</h4>
+                  <div className="flex gap-2 text-[9.5px] font-semibold">
+                    <ResumeLink url={project.github} label="GitHub" className="text-blue-700" />
+                    <ResumeLink url={project.live} label="Live Project" className="text-blue-700" />
+                  </div>
+                </div>
+                {project.technologies && <p className="text-[9.5px] font-semibold text-gray-600">Technologies: {project.technologies}</p>}
+                {project.description && <p className="mt-1 whitespace-pre-line text-[10.5px] leading-relaxed text-gray-700">{project.description}</p>}
+              </article>
+            ))}
+          </section>
+        );
+      }
+
+      if (sectionId === 'certifications' && certifications.length > 0) {
+        return (
+          <section key={sectionId} className="avoid-break space-y-2 text-left">
+            <h3 className={headingClass}>Certifications</h3>
+            {certifications.map(certification => (
+              <div key={certification.id} className="text-[10.5px] text-gray-700">
+                <strong>{certification.name}</strong>
+                {certification.issuer && ` | ${certification.issuer}`}
+                {certification.date && ` | ${certification.date}`}
+                {certification.url && <> | <ResumeLink url={certification.url} label="Credential" className="text-blue-700" /></>}
+              </div>
+            ))}
+          </section>
+        );
+      }
+
+      if (sectionId === 'achievements' && achievements.length > 0) {
+        return (
+          <section key={sectionId} className="avoid-break space-y-2 text-left">
+            <h3 className={headingClass}>Achievements</h3>
+            <ul className="list-disc space-y-1 pl-4 text-[10.5px] text-gray-700">
+              {achievements.map((achievement, index) => <li key={index}>{achievement}</li>)}
+            </ul>
+          </section>
+        );
+      }
+
+      if (sectionId === 'volunteering' && volunteering.length > 0) {
+        return (
+          <section key={sectionId} className="space-y-3 text-left">
+            <h3 className={headingClass}>Volunteering</h3>
+            {volunteering.map(entry => (
+              <article key={entry.id} className="avoid-break">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h4 className="text-xs font-bold text-gray-900">{entry.title} | {entry.company}</h4>
+                  <span className="text-[9.5px] font-semibold text-gray-500">{entry.startDate} - {entry.endDate}</span>
+                </div>
+                {entry.location && <p className="text-[9.5px] text-gray-500">{entry.location}</p>}
+                {entry.description && <p className="mt-1 whitespace-pre-line text-[10.5px] text-gray-700">{entry.description}</p>}
+              </article>
+            ))}
+          </section>
+        );
+      }
+
+      if (sectionId === 'languages' && languages.length > 0) {
+        return (
+          <section key={sectionId} className="avoid-break space-y-2 text-left">
+            <h3 className={headingClass}>Languages</h3>
+            <p className="text-[10.5px] text-gray-700">{languages.join(', ')}</p>
+          </section>
+        );
+      }
+
+      return null;
+    });
+  };
+
   // ==========================================
   // TEMPLATE 1: MODERN
   // ==========================================
@@ -614,15 +931,7 @@ export default function ResumePreview({
         {/* Header Block */}
         <div className="flex flex-col sm:flex-row justify-between items-start gap-4 pb-4 border-b-2 border-indigo-500 avoid-break text-left">
           <div className="flex items-center gap-4">
-            {personalDetails.profilePhoto && (
-              <img 
-                src={personalDetails.profilePhoto} 
-                alt="ProfilePhoto"
-                className="h-16 w-16 rounded-xl object-cover border-2 border-indigo-100 shrink-0" 
-                referrerPolicy="no-referrer"
-                crossOrigin="anonymous"
-              />
-            )}
+            {renderProfilePhoto('h-16 w-16 rounded-xl border-2 border-indigo-100')}
             <div>
               <h1 className="text-3xl font-extrabold tracking-tight text-gray-950 uppercase leading-none">
                 {personalDetails.fullName || 'JANE SMITH'}
@@ -636,11 +945,7 @@ export default function ResumePreview({
             {personalDetails.email && <span>{personalDetails.email}</span>}
             {personalDetails.phone && <span>{personalDetails.phone}</span>}
             {personalDetails.location && <span>{personalDetails.location}</span>}
-            <div className="flex flex-wrap gap-2 justify-start sm:justify-end">
-              {personalDetails.website && <span className="underline">{personalDetails.website}</span>}
-              {personalDetails.linkedin && <span className="underline">{personalDetails.linkedin}</span>}
-              {personalDetails.github && <span className="underline">{personalDetails.github}</span>}
-            </div>
+            {renderContactLinks('justify-start sm:justify-end')}
           </div>
         </div>
 
@@ -719,8 +1024,8 @@ export default function ResumePreview({
                         <div className="flex justify-between items-baseline flex-wrap gap-2">
                           <h4 className="text-xs font-bold text-slate-900">{p.name}</h4>
                           <div className="flex space-x-2 text-[9.5px]">
-                            {p.github && <span className="text-indigo-650 underline font-semibold select-all">repo</span>}
-                            {p.live && <span className="text-indigo-650 underline font-semibold select-all">live</span>}
+                            <ResumeLink url={p.github} label="GitHub" className="text-indigo-650 font-semibold" />
+                            <ResumeLink url={p.live} label="Live Project" className="text-indigo-650 font-semibold" />
                           </div>
                         </div>
                         {p.technologies && <span className="text-[9px] font-semibold text-indigo-600 block mt-1 bg-indigo-50/40 px-1.5 py-0.5 rounded w-max">Stack: {p.technologies}</span>}
@@ -777,6 +1082,7 @@ export default function ResumePreview({
                       <div key={c.id} className="text-[10px] bg-slate-50 p-2.5 rounded-lg border border-slate-100 shrink-0">
                         <span className="font-bold text-slate-900 block">{c.name}</span>
                         <span className="text-indigo-650 text-[8.5px] block font-bold mt-0.5">{c.issuer} • {c.date}</span>
+                        <ResumeLink url={c.url} label="Credential" className="mt-1 inline-block text-[9px] text-indigo-700" />
                       </div>
                     ))}
                   </div>
@@ -819,6 +1125,7 @@ export default function ResumePreview({
       <div className="space-y-6 max-w-[650px] mx-auto text-gray-800 leading-normal font-sans">
         {/* Minimal Centered Header */}
         <div className="text-center py-4 border-none avoid-break">
+          {renderProfilePhoto('mx-auto mb-4 h-20 w-20 rounded-full border border-slate-200 shadow-sm')}
           <h1 className="text-3xl font-light tracking-widest text-slate-900 uppercase">
             {personalDetails.fullName || 'JANE SMITH'}
           </h1>
@@ -829,15 +1136,16 @@ export default function ResumePreview({
             {personalDetails.email && <span>{personalDetails.email}</span>}
             {personalDetails.phone && <span>/ {personalDetails.phone}</span>}
             {personalDetails.location && <span>/ {personalDetails.location}</span>}
-            {personalDetails.website && <span>/ {personalDetails.website}</span>}
-            {personalDetails.linkedin && <span>/ {personalDetails.linkedin}</span>}
-            {personalDetails.github && <span>/ {personalDetails.github}</span>}
+            {renderContactLinks('justify-center')}
           </div>
         </div>
 
         {/* Minimal Summary */}
         {summary && isSectionVisible('summary') && (
           <div className="avoid-break text-center py-2 px-6">
+            <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-700 mb-2">
+              PROFESSIONAL SUMMARY
+            </h3>
             <p className="text-[11px] text-slate-500 font-light tracking-wide leading-relaxed italic pr-4 whitespace-pre-wrap">{summary}</p>
           </div>
         )}
@@ -907,8 +1215,8 @@ export default function ResumePreview({
                         <div className="flex justify-between items-baseline font-sans">
                           <h4 className="text-xs font-semibold text-slate-900 uppercase tracking-widest">{p.name}</h4>
                           <div className="flex space-x-2 text-[9px] text-slate-400">
-                            {p.github && <span className="underline select-all">{p.github}</span>}
-                            {p.live && <span className="underline select-all">{p.live}</span>}
+                            <ResumeLink url={p.github} label="GitHub" />
+                            <ResumeLink url={p.live} label="Live Project" />
                           </div>
                         </div>
                         {p.technologies && <span className="text-[9px] italic text-slate-400 block font-light select-all">Tools: {p.technologies}</span>}
@@ -957,15 +1265,7 @@ export default function ResumePreview({
         {/* LEFT COLUMN: 1/3 SIDEBAR */}
         <div className="md:col-span-1 bg-slate-50 border border-slate-200 p-5 rounded-xl space-y-5 flex flex-col justify-start text-left">
           {/* Picture if exists */}
-          {personalDetails.profilePhoto && (
-            <img 
-              src={personalDetails.profilePhoto} 
-              alt="ProfilePhoto"
-              className="h-24 w-24 rounded-full object-cover border-4 border-white shadow-sm mx-auto shrink-0 mb-2" 
-              referrerPolicy="no-referrer"
-              crossOrigin="anonymous"
-            />
-          )}
+          {renderProfilePhoto('h-24 w-24 rounded-full border-4 border-white shadow-sm mx-auto mb-2')}
 
           {/* Contact Details Block */}
           <div className="space-y-2 avoid-break text-left">
@@ -974,9 +1274,7 @@ export default function ResumePreview({
               {personalDetails.email && <div className="font-semibold">{personalDetails.email}</div>}
               {personalDetails.phone && <div>{personalDetails.phone}</div>}
               {personalDetails.location && <div>{personalDetails.location}</div>}
-              {personalDetails.website && <div className="underline select-all">{personalDetails.website}</div>}
-              {personalDetails.linkedin && <div className="underline select-all">{personalDetails.linkedin}</div>}
-              {personalDetails.github && <div className="underline select-all">{personalDetails.github}</div>}
+              {renderContactLinks('flex-col items-start')}
             </div>
           </div>
 
@@ -1024,6 +1322,7 @@ export default function ResumePreview({
                   <div key={c.id}>
                     <p className="font-bold text-slate-900">{c.name}</p>
                     <p className="italic text-[9.5px] mt-0.5">{c.issuer} ({c.date})</p>
+                    <ResumeLink url={c.url} label="Credential" className="text-[9px] text-slate-700" />
                   </div>
                 ))}
               </div>
@@ -1046,6 +1345,9 @@ export default function ResumePreview({
           {/* Executive Summary */}
           {summary && isSectionVisible('summary') && (
             <div className="avoid-break text-left">
+              <h3 className="text-[10px] font-bold text-slate-800 uppercase tracking-widest border-b border-slate-200 pb-1 mb-2">
+                PROFESSIONAL SUMMARY
+              </h3>
               <p className="text-[11px] text-slate-700 leading-relaxed whitespace-pre-wrap">{summary}</p>
             </div>
           )}
@@ -1089,8 +1391,8 @@ export default function ResumePreview({
                           <div className="flex justify-between items-baseline flex-wrap font-sans">
                             <h4 className="text-xs font-bold text-slate-955 uppercase">{p.name}</h4>
                             <div className="flex space-x-2 text-[9px] text-slate-400 font-semibold select-all">
-                              {p.github && <span className="underline select-all">{p.github}</span>}
-                              {p.live && <span className="underline select-all">{p.live}</span>}
+                              <ResumeLink url={p.github} label="GitHub" />
+                              <ResumeLink url={p.live} label="Live Project" />
                             </div>
                           </div>
                           {p.technologies && <span className="text-[9px] font-semibold text-indigo-700 font-mono">Tech: {p.technologies}</span>}
@@ -1138,6 +1440,7 @@ export default function ResumePreview({
       <div className="space-y-6 text-gray-800">
         {/* Centered Traditional Boardroom Letterhead */}
         <div className="text-center pb-3 border-b-2 border-double border-emerald-800 avoid-break font-serif">
+          {renderProfilePhoto('mx-auto mb-3 h-20 w-20 rounded-full border-2 border-emerald-100 shadow-sm')}
           <h1 className="text-3xl font-bold tracking-widest text-emerald-955 italic font-serif">
             {personalDetails.fullName || 'JANE SMITH'}
           </h1>
@@ -1148,15 +1451,14 @@ export default function ResumePreview({
             {personalDetails.email && <span>{personalDetails.email}</span>}
             {personalDetails.phone && <span>• {personalDetails.phone}</span>}
             {personalDetails.location && <span>• {personalDetails.location}</span>}
-            {personalDetails.website && <span>• {personalDetails.website}</span>}
-            {personalDetails.linkedin && <span>• {personalDetails.linkedin}</span>}
+            {renderContactLinks('justify-center')}
           </div>
         </div>
 
         {/* Boardroom Summary Blockquote */}
         {summary && isSectionVisible('summary') && (
           <div className="avoid-break border-l-4 border-emerald-850 pl-4 py-1 italic text-left">
-            <h3 className="text-[10px] font-bold tracking-widest text-emerald-850 uppercase mb-0.5 font-sans justify-start text-left">EXECUTIVE BRIEF</h3>
+            <h3 className="text-[10px] font-bold tracking-widest text-emerald-850 uppercase mb-0.5 font-sans justify-start text-left">PROFESSIONAL SUMMARY</h3>
             <p className="text-[11.5px] text-gray-755 leading-relaxed font-serif whitespace-pre-wrap">{summary}</p>
           </div>
         )}
@@ -1245,19 +1547,33 @@ export default function ResumePreview({
       <div className="space-y-6 font-sans">
         {/* Creative Headline Block */}
         <div className="bg-gradient-to-r from-violet-600 via-indigo-600 to-indigo-700 text-white p-6 rounded-2xl flex flex-col justify-between items-start gap-4 avoid-break shadow-md text-left font-sans">
-          <div>
-            <h1 className="text-3xl font-extrabold tracking-tight text-white uppercase leading-none">
-              {personalDetails.fullName || 'JANE SMITH'}
-            </h1>
-            <p className="text-sm font-bold text-yellow-300 tracking-wider uppercase mt-1.5 font-sans">
-              💡 {personalDetails.professionalTitle || 'Creative Technologist'}
-            </p>
-          </div>
+          {shouldUseProfilePhoto ? (
+            <div className="flex w-full items-center justify-between gap-5">
+              <div className="min-w-0">
+                <h1 className="text-3xl font-extrabold tracking-tight text-white uppercase leading-none">
+                  {personalDetails.fullName || 'JANE SMITH'}
+                </h1>
+                <p className="text-sm font-bold text-yellow-300 tracking-wider uppercase mt-1.5 font-sans">
+                  {personalDetails.professionalTitle || 'Creative Technologist'}
+                </p>
+              </div>
+              {renderProfilePhoto('h-20 w-20 rounded-2xl border-2 border-white/70 shadow-md')}
+            </div>
+          ) : (
+            <div>
+              <h1 className="text-3xl font-extrabold tracking-tight text-white uppercase leading-none">
+                {personalDetails.fullName || 'JANE SMITH'}
+              </h1>
+              <p className="text-sm font-bold text-yellow-300 tracking-wider uppercase mt-1.5 font-sans">
+                {personalDetails.professionalTitle || 'Creative Technologist'}
+              </p>
+            </div>
+          )}
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-indigo-100 uppercase font-bold tracking-wide">
             {personalDetails.email && <span>{personalDetails.email}</span>}
             {personalDetails.phone && <span>/ {personalDetails.phone}</span>}
             {personalDetails.location && <span>/ {personalDetails.location}</span>}
-            {personalDetails.website && <span className="underline select-all">{personalDetails.website}</span>}
+            {renderContactLinks('text-yellow-200')}
           </div>
         </div>
 
@@ -1267,6 +1583,9 @@ export default function ResumePreview({
           <div className="md:col-span-2 space-y-5 text-left font-sans">
             {summary && isSectionVisible('summary') && (
               <div className="avoid-break bg-violet-100/25 p-4 rounded-xl border border-violet-100/50 text-left">
+                <h3 className="text-[10px] font-extrabold uppercase tracking-widest text-violet-700 mb-1">
+                  PROFESSIONAL SUMMARY
+                </h3>
                 <p className="text-[11.5px] text-indigo-950 font-medium whitespace-pre-wrap leading-relaxed pr-2">{summary}</p>
               </div>
             )}
@@ -1310,8 +1629,8 @@ export default function ResumePreview({
                           <div className="flex justify-between items-baseline gap-2 font-sans">
                             <h4 className="text-xs font-bold text-slate-900 font-sans">{p.name}</h4>
                             <div className="flex space-x-2 text-[9px] text-violet-605 font-bold font-sans">
-                              {p.github && <span className="underline select-all">Github</span>}
-                              {p.live && <span className="underline select-all font-sans">Live</span>}
+                              <ResumeLink url={p.github} label="GitHub" />
+                              <ResumeLink url={p.live} label="Live Project" />
                             </div>
                           </div>
                           {p.technologies && <span className="text-[9px] font-bold text-indigo-500 font-mono block select-all mt-0.5">Stack: {p.technologies}</span>}
@@ -1375,26 +1694,46 @@ export default function ResumePreview({
       <div className="space-y-4 max-w-[750px] mx-auto text-black font-sans leading-normal">
         {/* Strictly Standard Left Aligned Plain Text Header */}
         <div className="pb-1 border-b-2 border-black avoid-break text-left">
-          <h1 className="text-2xl font-bold tracking-tight text-black uppercase leading-none select-all font-sans">
-            {personalDetails.fullName || 'JANE SMITH'}
-          </h1>
-          <p className="text-xs font-bold text-black uppercase tracking-wider mt-1.5 font-sans">
-            {personalDetails.professionalTitle || 'Software Architect'}
-          </p>
-          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-gray-800 tracking-wide font-sans select-all font-semibold uppercase">
-            {personalDetails.email && <span>Email: {personalDetails.email}</span>}
-            {personalDetails.phone && <span>| Phone: {personalDetails.phone}</span>}
-            {personalDetails.location && <span>| Location: {personalDetails.location}</span>}
-            {personalDetails.website && <span>| Web: {personalDetails.website}</span>}
-            {personalDetails.linkedin && <span>| LinkedIn: {personalDetails.linkedin}</span>}
-            {personalDetails.github && <span>| GitHub: {personalDetails.github}</span>}
-          </div>
+          {shouldUseProfilePhoto ? (
+            <div className="flex items-start justify-between gap-5">
+              <div className="min-w-0 flex-1">
+                <h1 className="text-2xl font-bold tracking-tight text-black uppercase leading-none select-all font-sans">
+                  {personalDetails.fullName || 'JANE SMITH'}
+                </h1>
+                <p className="text-xs font-bold text-black uppercase tracking-wider mt-1.5 font-sans">
+                  {personalDetails.professionalTitle || 'Software Architect'}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-gray-800 tracking-wide font-sans select-all font-semibold uppercase">
+                  {personalDetails.email && <span>Email: {personalDetails.email}</span>}
+                  {personalDetails.phone && <span>| Phone: {personalDetails.phone}</span>}
+                  {personalDetails.location && <span>| Location: {personalDetails.location}</span>}
+                  {renderContactLinks()}
+                </div>
+              </div>
+              {renderProfilePhoto('h-16 w-16 rounded-sm border border-black')}
+            </div>
+          ) : (
+            <>
+              <h1 className="text-2xl font-bold tracking-tight text-black uppercase leading-none select-all font-sans">
+                {personalDetails.fullName || 'JANE SMITH'}
+              </h1>
+              <p className="text-xs font-bold text-black uppercase tracking-wider mt-1.5 font-sans">
+                {personalDetails.professionalTitle || 'Software Architect'}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-gray-800 tracking-wide font-sans select-all font-semibold uppercase">
+                {personalDetails.email && <span>Email: {personalDetails.email}</span>}
+                {personalDetails.phone && <span>| Phone: {personalDetails.phone}</span>}
+                {personalDetails.location && <span>| Location: {personalDetails.location}</span>}
+                {renderContactLinks()}
+              </div>
+            </>
+          )}
         </div>
 
         {/* ATS-friendly Summary */}
         {summary && isSectionVisible('summary') && (
           <div className="avoid-break pt-1 text-left font-sans">
-            <h3 className="text-[10px] font-bold uppercase tracking-wider text-black border-b border-black pb-0.5 mb-1 select-all font-sans">SUMMARY</h3>
+            <h3 className="text-[10px] font-bold uppercase tracking-wider text-black border-b border-black pb-0.5 mb-1 select-all font-sans">PROFESSIONAL SUMMARY</h3>
             <p className="text-[10.5px] text-black pr-2 select-all leading-normal whitespace-pre-wrap font-sans">{summary}</p>
           </div>
         )}
@@ -1502,22 +1841,37 @@ export default function ResumePreview({
       <div className="space-y-5 leading-normal font-mono">
         {/* Core Code Terminal Head */}
         <div className="pb-3 border border-slate-700 bg-slate-900 text-slate-100 p-5 rounded-xl flex flex-col sm:flex-row justify-between items-start gap-4 avoid-break font-mono select-none text-left">
-          <div>
-            <span className="text-yellow-400 text-xs">const devCandidate = {'{'}</span>
-            <h1 className="text-2xl font-bold tracking-tight text-white uppercase mt-1 pl-4">
-              fullName: "{personalDetails.fullName || 'JANE SMITH'}",
-            </h1>
-            <p className="text-xs font-bold text-indigo-305 mt-1 pl-4">
-              role: "{personalDetails.professionalTitle || 'Software Architect'}",
-            </p>
-            <span className="text-yellow-400 text-xs">{'}'}</span>
-          </div>
+          {shouldUseProfilePhoto ? (
+            <div className="flex min-w-0 items-center gap-4">
+              {renderProfilePhoto('h-20 w-20 rounded-lg border border-cyan-400/60')}
+              <div>
+                <span className="text-yellow-400 text-xs">const devCandidate = {'{'}</span>
+                <h1 className="text-2xl font-bold tracking-tight text-white uppercase mt-1 pl-4">
+                  fullName: "{personalDetails.fullName || 'JANE SMITH'}",
+                </h1>
+                <p className="text-xs font-bold text-indigo-305 mt-1 pl-4">
+                  role: "{personalDetails.professionalTitle || 'Software Architect'}",
+                </p>
+                <span className="text-yellow-400 text-xs">{'}'}</span>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <span className="text-yellow-400 text-xs">const devCandidate = {'{'}</span>
+              <h1 className="text-2xl font-bold tracking-tight text-white uppercase mt-1 pl-4">
+                fullName: "{personalDetails.fullName || 'JANE SMITH'}",
+              </h1>
+              <p className="text-xs font-bold text-indigo-305 mt-1 pl-4">
+                role: "{personalDetails.professionalTitle || 'Software Architect'}",
+              </p>
+              <span className="text-yellow-400 text-xs">{'}'}</span>
+            </div>
+          )}
           <div className="text-[9.5px] font-mono text-cyan-400 mt-2 pl-0 sm:pl-4 flex flex-col items-start gap-0.5">
             {personalDetails.email && <span>email: "{personalDetails.email}",</span>}
             {personalDetails.phone && <span>phone: "{personalDetails.phone}",</span>}
             {personalDetails.location && <span>location: "{personalDetails.location}",</span>}
-            {personalDetails.linkedin && <span>linkedin: "{personalDetails.linkedin}",</span>}
-            {personalDetails.github && <span>github: "{personalDetails.github}"</span>}
+            {renderContactLinks('text-cyan-400')}
           </div>
         </div>
 
@@ -1527,7 +1881,7 @@ export default function ResumePreview({
           <div className="md:col-span-2 space-y-5 font-mono text-left">
             {summary && isSectionVisible('summary') && (
               <div className="avoid-break border border-slate-200 font-mono p-4 rounded-xl bg-slate-50 text-[10.5px] text-left">
-                <span className="text-indigo-650 font-bold block mb-1 font-mono">// EXECUTIVE BRIEF: </span>
+                <span className="text-indigo-650 font-bold block mb-1 font-mono">// PROFESSIONAL SUMMARY</span>
                 <p className="text-slate-700 whitespace-pre-wrap leading-relaxed pr-1">{summary}</p>
               </div>
             )}
@@ -1640,14 +1994,28 @@ export default function ResumePreview({
       <div className="space-y-6 font-sans">
         {/* Clean student-friendly header block */}
         <div className="flex flex-col sm:flex-row justify-between items-center text-center sm:text-left gap-4 pb-4 border-b border-violet-205 avoid-break">
-          <div className="text-left font-sans">
-            <h1 className="text-3xl font-extrabold tracking-tight text-violet-950 uppercase leading-none">
-              {personalDetails.fullName || 'JANE SMITH'}
-            </h1>
-            <p className="text-sm font-semibold tracking-wider text-violet-605 uppercase mt-1.5">
-              🎓 Student / Candidate
-            </p>
-          </div>
+          {shouldUseProfilePhoto ? (
+            <div className="flex items-center gap-4 text-left font-sans">
+              {renderProfilePhoto('h-16 w-16 rounded-full border-2 border-violet-100')}
+              <div>
+                <h1 className="text-3xl font-extrabold tracking-tight text-violet-950 uppercase leading-none">
+                  {personalDetails.fullName || 'JANE SMITH'}
+                </h1>
+                <p className="text-sm font-semibold tracking-wider text-violet-605 uppercase mt-1.5">
+                  Student / Candidate
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="text-left font-sans">
+              <h1 className="text-3xl font-extrabold tracking-tight text-violet-950 uppercase leading-none">
+                {personalDetails.fullName || 'JANE SMITH'}
+              </h1>
+              <p className="text-sm font-semibold tracking-wider text-violet-605 uppercase mt-1.5">
+                Student / Candidate
+              </p>
+            </div>
+          )}
           <div className="flex flex-col items-center sm:items-end text-[10px] text-gray-500 font-medium space-y-0.5 text-right font-sans">
             <span>{personalDetails.email}</span>
             <span>{personalDetails.phone}</span>
@@ -1657,7 +2025,7 @@ export default function ResumePreview({
 
         {summary && isSectionVisible('summary') && (
           <div className="avoid-break bg-violet-50/15 p-4 rounded-xl border border-violet-100 text-left">
-            <h3 className="text-[10px] font-bold uppercase tracking-widest text-violet-600 mb-1 font-sans">CAREER OBJECTIVE</h3>
+            <h3 className="text-[10px] font-bold uppercase tracking-widest text-violet-600 mb-1 font-sans">PROFESSIONAL SUMMARY</h3>
             <p className="text-[11px] text-gray-600 leading-relaxed whitespace-pre-wrap pr-1 font-sans">{summary}</p>
           </div>
         )}
@@ -1730,14 +2098,28 @@ export default function ResumePreview({
       <div className="space-y-5 flex flex-col items-stretch leading-relaxed font-sans text-left">
         {/* Startup Direct pitch header */}
         <div className="flex flex-col sm:flex-row justify-between items-start gap-4 pb-4 border-b-2 border-emerald-500 avoid-break text-left font-sans">
-          <div>
-            <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 uppercase leading-none">
-              {personalDetails.fullName || 'JANE SMITH'}
-            </h1>
-            <p className="text-sm font-bold tracking-widest text-emerald-600 uppercase mt-1.5 font-sans">
-              🚀 {personalDetails.professionalTitle || 'Software Architect'}
-            </p>
-          </div>
+          {shouldUseProfilePhoto ? (
+            <div className="flex items-center gap-4">
+              {renderProfilePhoto('h-16 w-16 rounded-xl border-2 border-emerald-100 shadow-sm')}
+              <div>
+                <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 uppercase leading-none">
+                  {personalDetails.fullName || 'JANE SMITH'}
+                </h1>
+                <p className="text-sm font-bold tracking-widest text-emerald-600 uppercase mt-1.5 font-sans">
+                  {personalDetails.professionalTitle || 'Software Architect'}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 uppercase leading-none">
+                {personalDetails.fullName || 'JANE SMITH'}
+              </h1>
+              <p className="text-sm font-bold tracking-widest text-emerald-600 uppercase mt-1.5 font-sans">
+                {personalDetails.professionalTitle || 'Software Architect'}
+              </p>
+            </div>
+          )}
           <div className="flex flex-col items-start sm:items-end text-[10px] text-slate-500 font-bold space-y-0.5 select-all font-sans text-left sm:text-right">
             {personalDetails.email && <span>{personalDetails.email}</span>}
             {personalDetails.phone && <span>{personalDetails.phone}</span>}
@@ -1748,7 +2130,7 @@ export default function ResumePreview({
         {/* Highlighted Elevator Summary */}
         {summary && isSectionVisible('summary') && (
           <div className="avoid-break text-center border-y border-slate-100 py-4 px-6 my-1 font-sans">
-            <h4 className="text-[10.5px] font-extrabold uppercase text-emerald-700 tracking-wider">Elevator Pitch</h4>
+            <h4 className="text-[10.5px] font-extrabold uppercase text-emerald-700 tracking-wider">PROFESSIONAL SUMMARY</h4>
             <p className="text-[11.5px] text-slate-705 font-semibold italic max-w-xl mx-auto mt-1 leading-relaxed select-all">
               "{summary}"
             </p>
@@ -1766,7 +2148,7 @@ export default function ResumePreview({
             if (secId === 'experience' && experience.length > 0) {
               return (
                 <div key={secId} className="space-y-3 font-sans">
-                  <h3 className="text-xs font-extrabold uppercase tracking-widest text-slate-900 border-b border-emerald-100 pb-1 flex items-center gap-1.5 text-left">📈 Traction / Achievements</h3>
+                  <h3 className="text-xs font-extrabold uppercase tracking-widest text-slate-900 border-b border-emerald-100 pb-1 flex items-center gap-1.5 text-left">Traction / Achievements</h3>
                   <div className="space-y-3">
                     {experience.map(e => (
                       <div key={e.id} className="avoid-break bg-white hover:border-emerald-100 border border-slate-100 p-4 rounded-xl flex flex-col justify-between text-left font-sans">
@@ -1786,7 +2168,7 @@ export default function ResumePreview({
             if (secId === 'projects' && projects.length > 0) {
               return (
                 <div key={secId} className="space-y-3">
-                  <h3 className="text-xs font-extrabold uppercase tracking-widest text-slate-900 border-b border-emerald-100 pb-1 text-left">⚡ Shipping Record</h3>
+                  <h3 className="text-xs font-extrabold uppercase tracking-widest text-slate-900 border-b border-emerald-100 pb-1 text-left">Shipping Record</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
                     {projects.map(p => (
                       <div key={p.id} className="avoid-break bg-emerald-50/10 border border-emerald-50 p-3.5 rounded-xl font-sans text-left">
@@ -1816,14 +2198,7 @@ export default function ResumePreview({
         {/* LEFT COLUMN: CHARCOAL SIDEBAR */}
         <div className="md:col-span-1 bg-slate-900 text-slate-100 p-6 rounded-2xl space-y-6 flex flex-col shrink-0 text-left">
           <div className="text-center space-y-3 avoid-break">
-            {personalDetails.profilePhoto && (
-              <img 
-                src={personalDetails.profilePhoto} 
-                alt="ProfilePhoto"
-                className="h-24 w-24 rounded-2xl object-cover border-4 border-slate-800 mx-auto" 
-                referrerPolicy="no-referrer"
-              />
-            )}
+            {renderProfilePhoto('h-24 w-24 rounded-2xl border-4 border-slate-800 mx-auto')}
             <div className="text-left font-sans">
               <h1 className="text-xl font-bold tracking-widest uppercase text-white font-sans">
                 {personalDetails.fullName || 'JANE SMITH'}
@@ -1858,7 +2233,7 @@ export default function ResumePreview({
         <div className="md:col-span-2 space-y-6 text-left font-sans text-left animate-none">
           {summary && isSectionVisible('summary') && (
             <div className="avoid-break border-r-4 border-violet-500 bg-slate-50 p-4 rounded-xl text-left">
-              <h4 className="text-[9px] font-extrabold uppercase text-violet-600 tracking-wider mb-1">About Frame /</h4>
+              <h4 className="text-[9px] font-extrabold uppercase text-violet-600 tracking-wider mb-1">PROFESSIONAL SUMMARY</h4>
               <p className="text-[11.5px] text-slate-700 leading-relaxed italic pr-2 whitespace-pre-wrap">{summary}</p>
             </div>
           )}
@@ -1907,14 +2282,28 @@ export default function ResumePreview({
       <div className="space-y-5 flex flex-col items-stretch leading-relaxed font-sans text-left">
         {/* Technical metrics header */}
         <div className="flex flex-col sm:flex-row justify-between items-start gap-4 pb-4 border-b-4 border-teal-700 avoid-break font-mono text-left">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-gray-950 uppercase leading-none select-all font-sans">
-              {personalDetails.fullName || 'JANE SMITH'}
-            </h1>
-            <p className="text-xs font-bold text-teal-700 tracking-wider uppercase mt-1.5">
-              📊 {personalDetails.professionalTitle || 'Senior Analyst'}
-            </p>
-          </div>
+          {shouldUseProfilePhoto ? (
+            <div className="flex items-center gap-4">
+              {renderProfilePhoto('h-16 w-16 rounded-full border-2 border-teal-100')}
+              <div>
+                <h1 className="text-2xl font-bold tracking-tight text-gray-950 uppercase leading-none select-all font-sans">
+                  {personalDetails.fullName || 'JANE SMITH'}
+                </h1>
+                <p className="text-xs font-bold text-teal-700 tracking-wider uppercase mt-1.5">
+                  {personalDetails.professionalTitle || 'Senior Analyst'}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight text-gray-950 uppercase leading-none select-all font-sans">
+                {personalDetails.fullName || 'JANE SMITH'}
+              </h1>
+              <p className="text-xs font-bold text-teal-700 tracking-wider uppercase mt-1.5">
+                {personalDetails.professionalTitle || 'Senior Analyst'}
+              </p>
+            </div>
+          )}
           <div className="flex flex-col items-start sm:items-end text-[10px] text-gray-500 font-bold space-y-0.5 select-all font-sans text-left sm:text-right font-sans">
             {personalDetails.email && <span>{personalDetails.email}</span>}
             {personalDetails.phone && <span>{personalDetails.phone}</span>}
@@ -1924,7 +2313,7 @@ export default function ResumePreview({
 
         {summary && isSectionVisible('summary') && (
           <div className="avoid-break bg-teal-50/20 p-4 border border-teal-100 rounded-xl text-left font-sans">
-            <h4 className="text-[10px] font-bold text-teal-800 uppercase tracking-widest font-mono mb-1">// METRIC INSIGHTS BRIEF</h4>
+            <h4 className="text-[10px] font-bold text-teal-800 uppercase tracking-widest font-mono mb-1">// PROFESSIONAL SUMMARY</h4>
             <p className="text-[11px] text-gray-700 whitespace-pre-wrap select-all leading-relaxed font-sans pr-2">{summary}</p>
           </div>
         )}
@@ -1974,6 +2363,7 @@ export default function ResumePreview({
       <div className="space-y-6 max-w-[700px] mx-auto text-gray-905 leading-normal font-serif">
         {/* Standard Editorial Letterhead */}
         <div className="text-center pb-2 border-b border-gray-300 avoid-break">
+          {renderProfilePhoto('mx-auto mb-3 h-20 w-20 rounded-full border border-gray-300 shadow-sm')}
           <h1 className="text-3xl font-extrabold tracking-tight mt-1 text-black select-all uppercase font-serif">
             {personalDetails.fullName || 'JANE SMITH'}
           </h1>
@@ -1984,13 +2374,15 @@ export default function ResumePreview({
             {personalDetails.email && <span>{personalDetails.email}</span>}
             {personalDetails.phone && <span>• {personalDetails.phone}</span>}
             {personalDetails.location && <span>• {personalDetails.location}</span>}
-            {personalDetails.website && <span>• {personalDetails.website}</span>}
-            {personalDetails.linkedin && <span>• {personalDetails.linkedin}</span>}
+            {renderContactLinks('justify-center')}
           </div>
         </div>
 
         {summary && isSectionVisible('summary') && (
           <div className="avoid-break text-center py-2 italic font-serif text-[11.5px] text-gray-700 leading-relaxed max-w-2xl mx-auto whitespace-pre-wrap">
+            <h3 className="text-[10px] font-bold uppercase tracking-widest text-gray-900 not-italic mb-2 border-b border-gray-200 pb-1">
+              PROFESSIONAL SUMMARY
+            </h3>
             "{summary}"
           </div>
         )}
@@ -2096,33 +2488,180 @@ export default function ResumePreview({
 
   // Master Layout Router
   const renderTemplateContent = (id: TemplateId) => {
+    let layout: React.ReactNode;
     switch (id) {
       case 'modern':
-        return renderModernLayout();
+        layout = renderModernLayout();
+        break;
       case 'minimal':
-        return renderMinimalLayout();
+        layout = renderMinimalLayout();
+        break;
       case 'corporate':
-        return renderCorporateLayout();
+        layout = renderCorporateLayout();
+        break;
       case 'executive':
-        return renderExecutiveLayout();
+        layout = renderExecutiveLayout();
+        break;
       case 'creative':
-        return renderCreativeLayout();
+        layout = renderCreativeLayout();
+        break;
       case 'atsFriendly':
-        return renderAtsFriendlyLayout();
+        layout = renderAtsFriendlyLayout();
+        break;
       case 'softwareEngineer':
-        return renderSoftwareEngineerLayout();
+        layout = renderSoftwareEngineerLayout();
+        break;
       case 'student':
-        return renderStudentLayout();
+        layout = renderStudentLayout();
+        break;
       case 'startup':
-        return renderStartupLayout();
+        layout = renderStartupLayout();
+        break;
       case 'designer':
-        return renderDesignerLayout();
+        layout = renderDesignerLayout();
+        break;
       case 'dataAnalyst':
-        return renderDataAnalystLayout();
+        layout = renderDataAnalystLayout();
+        break;
       case 'classic':
       default:
-        return renderClassicLayout();
+        layout = renderClassicLayout();
+        break;
     }
+
+    const customIds = customSections.map(section => section.id);
+    const nativeCustomIds = customIds.filter(id => sectionOrder.includes(id));
+    const handledByTemplate: Record<TemplateId, string[]> = {
+      modern: ['summary', 'experience', 'internships', 'education', 'skills', 'projects', 'certifications', 'achievements', 'languages', ...nativeCustomIds],
+      minimal: ['summary', 'experience', 'internships', 'education', 'skills', 'projects', ...nativeCustomIds],
+      corporate: ['summary', 'experience', 'internships', 'education', 'skills', 'projects', 'certifications', 'languages'],
+      executive: ['summary', 'experience', 'internships', 'education', 'skills'],
+      creative: ['summary', 'experience', 'internships', 'education', 'skills', 'projects'],
+      atsFriendly: ['summary', 'experience', 'internships', 'education', 'skills', 'projects', ...nativeCustomIds],
+      softwareEngineer: ['summary', 'experience', 'internships', 'education', 'skills', 'projects'],
+      student: ['summary', 'experience', 'education', 'projects'],
+      startup: ['summary', 'experience', 'internships', 'projects'],
+      designer: ['summary', 'experience', 'internships', 'skills'],
+      dataAnalyst: ['summary', 'experience', 'internships'],
+      classic: ['summary', 'experience', 'internships', 'education', 'skills', 'projects'],
+    };
+
+    return (
+      <div className="space-y-6">
+        {layout}
+        {(personalDetails.website || personalDetails.linkedin || personalDetails.github) && (
+          <section className="avoid-break border-t border-gray-200 pt-3 text-left">
+            <h3 className="mb-1 text-[9.5px] font-bold uppercase tracking-widest text-gray-500">Online Links</h3>
+            {renderContactLinks('text-[10.5px] font-semibold text-blue-700')}
+          </section>
+        )}
+        {projects.some(project => project.github || project.live) && (
+          <section className="avoid-break border-t border-gray-200 pt-3 text-left">
+            <h3 className="mb-1 text-[9.5px] font-bold uppercase tracking-widest text-gray-500">Project Links</h3>
+            <div className="space-y-1 text-[10.5px]">
+              {projects.map(project => (project.github || project.live) && (
+                <div key={project.id} className="flex flex-wrap gap-x-2">
+                  <strong className="text-gray-700">{project.name}:</strong>
+                  <ResumeLink url={project.github} label="GitHub" className="font-semibold text-blue-700" />
+                  <ResumeLink url={project.live} label="Live Project" className="font-semibold text-blue-700" />
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+        {certifications.some(certification => certification.url) && (
+          <section className="avoid-break border-t border-gray-200 pt-3 text-left">
+            <h3 className="mb-1 text-[9.5px] font-bold uppercase tracking-widest text-gray-500">Credential Links</h3>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10.5px]">
+              {certifications.map(certification => certification.url && (
+                <React.Fragment key={certification.id}>
+                  <ResumeLink
+                    url={certification.url}
+                    label={certification.name || 'Credential'}
+                    className="font-semibold text-blue-700"
+                  />
+                </React.Fragment>
+              ))}
+            </div>
+          </section>
+        )}
+        <div className="space-y-6">
+          {renderSupplementalSections(new Set(handledByTemplate[id]))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderOrderedTemplateContent = (id: TemplateId) => {
+    const theme = getTemplateTheme(id);
+    const usesDarkHeader = id === 'creative';
+    const centeredHeader = id === 'minimal' || id === 'executive' || id === 'classic';
+    const photoClassByTemplate: Record<TemplateId, string> = {
+      modern: 'h-16 w-16 rounded-xl border-2 border-indigo-100',
+      minimal: 'h-20 w-20 rounded-full border border-slate-200 shadow-sm',
+      corporate: 'h-20 w-20 rounded-full border-4 border-white shadow-sm',
+      executive: 'h-20 w-20 rounded-full border-2 border-emerald-100 shadow-sm',
+      creative: 'h-20 w-20 rounded-2xl border-2 border-white/70 shadow-md',
+      atsFriendly: 'h-16 w-16 rounded-sm border border-black',
+      softwareEngineer: 'h-20 w-20 rounded-lg border border-cyan-400/60',
+      student: 'h-16 w-16 rounded-full border-2 border-violet-100',
+      startup: 'h-16 w-16 rounded-xl border-2 border-emerald-100 shadow-sm',
+      designer: 'h-20 w-20 rounded-2xl border-2 border-violet-200',
+      dataAnalyst: 'h-16 w-16 rounded-full border-2 border-teal-100',
+      classic: 'h-20 w-20 rounded-full border border-gray-300 shadow-sm',
+    };
+
+    return (
+      <div className={`space-y-6 ${theme.font}`}>
+        <header
+          className={`avoid-break ${theme.headerBg} ${
+            centeredHeader ? 'text-center' : 'text-left'
+          }`}
+        >
+          <div
+            className={`gap-4 ${
+              shouldUseProfilePhoto
+                ? centeredHeader
+                  ? 'flex flex-col items-center'
+                  : 'flex items-center justify-between'
+                : ''
+            }`}
+          >
+            <div className="min-w-0 flex-1">
+              <h1
+                className={`text-3xl font-extrabold uppercase leading-none tracking-tight ${
+                  usesDarkHeader ? 'text-white' : theme.titleColor
+                }`}
+              >
+                {personalDetails.fullName || 'JANE SMITH'}
+              </h1>
+              <p
+                className={`mt-1.5 text-xs font-bold uppercase tracking-wider ${
+                  usesDarkHeader ? 'text-yellow-200' : theme.headingColor
+                }`}
+              >
+                {personalDetails.professionalTitle || 'Software Architect'}
+              </p>
+              <div
+                className={`mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[10px] ${
+                  centeredHeader ? 'justify-center' : ''
+                } ${usesDarkHeader ? 'text-indigo-100' : 'text-gray-600'}`}
+              >
+                {personalDetails.email && <span>{personalDetails.email}</span>}
+                {personalDetails.phone && <span>{personalDetails.phone}</span>}
+                {personalDetails.location && <span>{personalDetails.location}</span>}
+                {renderContactLinks(centeredHeader ? 'justify-center' : '')}
+              </div>
+            </div>
+            {renderProfilePhoto(photoClassByTemplate[id])}
+          </div>
+        </header>
+
+        <main className="space-y-6">
+          {renderSupplementalSections(new Set())}
+        </main>
+      </div>
+    );
   };
 
   return (
@@ -2151,33 +2690,90 @@ export default function ResumePreview({
                 <p className="font-mono whitespace-pre-wrap"><strong>Stack Trace:</strong> {exportError.stack || 'Unspecified'}</p>
               </div>
               <p><strong>Component:</strong> ResumePreview</p>
-              <p className="text-[10px] text-rose-600 italic">Check the browser console for full resume data snapshot and html2canvas logs.</p>
+              <p className="text-[10px] text-rose-600 italic">Check the browser console for additional PDF export details.</p>
             </div>
           </div>
         )}
 
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <span className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
             <Eye className="h-4 w-4 text-indigo-500" />
             <span>Style Templates ({templatesList.length})</span>
           </span>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={handleDownloadPDF}
-              className="flex items-center space-x-1 border border-indigo-200  bg-indigo-50  px-3 py-1.5 rounded-lg text-xs font-bold text-indigo-700  hover:bg-indigo-100  transition shadow-sm cursor-pointer"
-              id="btn-trigger-download"
+          <div className="flex flex-col gap-2 sm:items-end">
+            <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-white p-1">
+              <button
+                type="button"
+                onClick={() => setExportMode('single')}
+                className={`rounded-md px-3 py-1 text-[10px] font-bold uppercase tracking-wide transition ${
+                  exportMode === 'single'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-500 hover:bg-gray-100'
+                }`}
+              >
+                Single Page
+              </button>
+              <button
+                type="button"
+                onClick={() => setExportMode('multi')}
+                className={`rounded-md px-3 py-1 text-[10px] font-bold uppercase tracking-wide transition ${
+                  exportMode === 'multi'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-500 hover:bg-gray-100'
+                }`}
+              >
+                Multi Page
+              </button>
+            </div>
+            <div
+              className="grid grid-cols-1 gap-1 rounded-lg border border-gray-200 bg-white p-1 sm:grid-cols-2"
+              role="group"
+              aria-label="Profile photo usage"
             >
-              <FileDown className="h-3.5 w-3.5" />
-              <span>Download PDF</span>
-            </button>
-            <button
-              onClick={handlePrint}
-              className="flex items-center space-x-1 border border-gray-200  bg-white  px-3 py-1.5 rounded-lg text-xs font-bold text-gray-700  hover:bg-gray-50  transition shadow-sm cursor-pointer"
-              id="btn-trigger-print"
-            >
-              <Printer className="h-3.5 w-3.5 text-gray-500 " />
-              <span>System Print</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => onProfilePhotoUsageChange(true)}
+                aria-pressed={resume.useProfilePhoto !== false}
+                className={`rounded-md px-3 py-1 text-[10px] font-bold uppercase tracking-wide transition ${
+                  resume.useProfilePhoto !== false
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-500 hover:bg-gray-100'
+                }`}
+              >
+                Use Profile Photo
+              </button>
+              <button
+                type="button"
+                onClick={() => onProfilePhotoUsageChange(false)}
+                aria-pressed={resume.useProfilePhoto === false}
+                className={`rounded-md px-3 py-1 text-[10px] font-bold uppercase tracking-wide transition ${
+                  resume.useProfilePhoto === false
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-500 hover:bg-gray-100'
+                }`}
+              >
+                Do Not Use Profile Photo
+              </button>
+            </div>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={handleDownloadPDF}
+                disabled={isExporting}
+                className="flex items-center space-x-1 border border-indigo-200 bg-indigo-50 px-3 py-1.5 rounded-lg text-xs font-bold text-indigo-700 hover:bg-indigo-100 transition shadow-sm cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                id="btn-trigger-download"
+              >
+                <FileDown className="h-3.5 w-3.5" />
+                <span>{isExporting ? 'Generating...' : `Download ${exportMode === 'single' ? 'Single' : 'Multi'} PDF`}</span>
+              </button>
+              <button
+                onClick={handlePrint}
+                className="flex items-center space-x-1 border border-gray-200 bg-white px-3 py-1.5 rounded-lg text-xs font-bold text-gray-700 hover:bg-gray-50 transition shadow-sm cursor-pointer"
+                id="btn-trigger-print"
+              >
+                <Printer className="h-3.5 w-3.5 text-gray-500 " />
+                <span>System Print</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -2190,11 +2786,7 @@ export default function ResumePreview({
                 onTemplateChange(t.id);
                 showToasts(`Switched style format to "${t.name}".`, 'info');
               }}
-              className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition text-center truncate cursor-pointer ${
-                selectedTemplate === t.id
-                  ? 'border-indigo-500 bg-indigo-50 text-indigo-600  '
-                  : 'border-gray-200/70 bg-white  text-gray-500 hover:border-gray-300   '
-              }`}
+              className={getTemplateButtonClass(t.id, selectedTemplate === t.id)}
               title={t.description}
             >
               {t.name}
@@ -2204,13 +2796,17 @@ export default function ResumePreview({
       </div>
 
       {/* PDF WRITING CANVAS - Standard document ratios (A4 / Letter layout) */}
-      <div className="flex-1 overflow-auto p-4 flex sm:justify-center bg-gray-100  rounded-xl max-h-[85vh]">
+      <div className="resume-canvas flex-1 overflow-auto p-3 sm:p-4 flex justify-center bg-gray-100 rounded-xl max-h-[85vh]">
         <div 
-          className={`print-page transition-all transform origin-top w-[750px] sm:w-full min-w-[750px] sm:max-w-[800px] min-h-[1060px] bg-white text-black shadow-lg rounded-sm p-8 sm:p-12 ${themeConfig.font}`}
+          className={`print-page transition-all transform origin-top w-full min-w-0 sm:min-w-[750px] sm:max-w-[800px] bg-white text-black shadow-lg rounded-sm ${
+            exportMode === 'single'
+              ? 'resume-export-single min-h-[970px] p-6 sm:p-8'
+              : 'min-h-[1060px] p-8 sm:p-12'
+          } ${themeConfig.font}`}
           id="resume-live-print-view"
           style={{ height: 'fit-content' }}
         >
-          {renderTemplateContent(selectedTemplate)}
+          {renderOrderedTemplateContent(selectedTemplate)}
         </div>
       </div>
     </div>

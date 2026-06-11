@@ -48,11 +48,12 @@ export default function ImageCropperModal({ imageSrc, onCropComplete, onClose }:
       throw new Error('No 2d context');
     }
 
-    // Set canvas to desired size
-    canvas.width = pixelCrop.width;
-    canvas.height = pixelCrop.height;
+    const outputSize = Math.min(512, Math.max(1, Math.round(Math.min(pixelCrop.width, pixelCrop.height))));
+    canvas.width = outputSize;
+    canvas.height = outputSize;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
 
-    // Draw the cropped image
     ctx.drawImage(
       image,
       pixelCrop.x,
@@ -61,12 +62,11 @@ export default function ImageCropperModal({ imageSrc, onCropComplete, onClose }:
       pixelCrop.height,
       0,
       0,
-      pixelCrop.width,
-      pixelCrop.height
+      outputSize,
+      outputSize
     );
 
-    // Return as base64 string
-    return canvas.toDataURL('image/jpeg');
+    return canvas.toDataURL('image/jpeg', 0.9);
   };
 
   const handleConfirm = async () => {

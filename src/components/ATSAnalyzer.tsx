@@ -3,6 +3,7 @@ import { ResumeData, AtsReport, ProfileData, UserSettings } from '../types';
 import { aiDeepAnalyzeAtsWithGroq } from '../services/groq';
 import { saveAtsReport, fetchUserAtsReports } from '../services/firebase';
 import { validateResumeText, parseResumeTextLocally, analyzeAtsLocally, LocalAtsResult } from '../utils/atsEngine';
+import { serializeResumeBySectionOrder } from '../utils/sectionOrder';
 import { motion, AnimatePresence } from 'motion/react';
 
 // @ts-ignore
@@ -56,6 +57,233 @@ interface ATSAnalyzerProps {
 type Mode = 'upload' | 'preset';
 type ProgressStep = 'idle' | 'reading' | 'ocr' | 'validating' | 'parsing' | 'scoring' | 'ai' | 'completed';
 
+// ============================================================
+// JOB DESCRIPTION LIBRARY — 17 professional categories
+// ============================================================
+const JD_LIBRARY: Record<string, { title: string; description: string }> = {
+  softwareEngineer: {
+    title: 'Software Engineer',
+    description:
+      `Job Title: Software Engineer\n\n` +
+      `We are looking for a Software Engineer to design, develop, and maintain high-quality software systems.\n\n` +
+      `Requirements:\n` +
+      `- 3+ years of experience in software development using languages such as Python, Java, C++, or Go.\n` +
+      `- Solid understanding of data structures, algorithms, and system design principles.\n` +
+      `- Experience with REST APIs, microservices architecture, and cloud platforms (AWS/GCP/Azure).\n` +
+      `- Familiarity with CI/CD pipelines, Docker, Kubernetes, and Git-based version control.\n` +
+      `- Strong problem-solving skills and ability to write clean, testable, and maintainable code.\n` +
+      `- Bachelor's degree in Computer Science or equivalent practical experience.`,
+  },
+  frontendDeveloper: {
+    title: 'Frontend Developer',
+    description:
+      `Job Title: Frontend Developer\n\n` +
+      `We are seeking a skilled Frontend Developer to build exceptional user interfaces for our web products.\n\n` +
+      `Requirements:\n` +
+      `- 3+ years of experience with React, Vue, or Angular frameworks.\n` +
+      `- Proficient in HTML5, CSS3, TypeScript, and modern JavaScript (ES6+).\n` +
+      `- Experience with responsive design, CSS-in-JS solutions (Styled Components, Tailwind CSS).\n` +
+      `- Familiarity with RESTful APIs, GraphQL, and browser performance optimization.\n` +
+      `- Understanding of accessibility standards (WCAG) and cross-browser compatibility.\n` +
+      `- Experience with testing frameworks such as Jest, Cypress, or React Testing Library.`,
+  },
+  backendDeveloper: {
+    title: 'Backend Developer',
+    description:
+      `Job Title: Backend Developer\n\n` +
+      `We are hiring a Backend Developer to build scalable server-side applications and APIs.\n\n` +
+      `Requirements:\n` +
+      `- 3+ years of backend development experience using Node.js, Python (Django/FastAPI), Java (Spring Boot), or Go.\n` +
+      `- Deep knowledge of relational (PostgreSQL, MySQL) and NoSQL (MongoDB, Redis) databases.\n` +
+      `- Experience designing and implementing RESTful APIs and GraphQL endpoints.\n` +
+      `- Familiarity with authentication protocols: OAuth2, JWT, session management.\n` +
+      `- Proficiency with Docker, Kubernetes, and cloud deployments (AWS Lambda, GCP Cloud Run).\n` +
+      `- Strong understanding of software architecture, SOLID principles, and test-driven development.`,
+  },
+  fullStackDeveloper: {
+    title: 'Full Stack Developer',
+    description:
+      `Job Title: Full Stack Developer\n\n` +
+      `We are looking for a Full Stack Developer comfortable across the entire web development stack.\n\n` +
+      `Requirements:\n` +
+      `- 4+ years of experience in full-stack development using React/Next.js and Node.js or Python.\n` +
+      `- Hands-on experience with both SQL (PostgreSQL, MySQL) and NoSQL (MongoDB, Firebase) databases.\n` +
+      `- Proficient in building and consuming REST APIs and microservices.\n` +
+      `- Experience with cloud services: AWS, Firebase, or GCP — including storage, auth, and deployment.\n` +
+      `- Familiarity with DevOps basics: CI/CD, Docker, environment configurations.\n` +
+      `- Excellent communication skills and experience working in Agile/Scrum environments.`,
+  },
+  flutterDeveloper: {
+    title: 'Flutter Developer',
+    description:
+      `Job Title: Flutter Developer\n\n` +
+      `We are seeking an experienced Flutter Developer to build cross-platform mobile applications.\n\n` +
+      `Requirements:\n` +
+      `- 2+ years of commercial experience building mobile apps with Flutter and Dart.\n` +
+      `- Published apps on the Google Play Store or Apple App Store.\n` +
+      `- Proficiency with Flutter state management solutions: Provider, Riverpod, BLoC, or GetX.\n` +
+      `- Experience integrating REST APIs, Firebase services (Firestore, Auth, Cloud Messaging).\n` +
+      `- Understanding of native platform differences (iOS/Android), adaptive UI patterns.\n` +
+      `- Familiarity with CI/CD for mobile apps using Fastlane, Codemagic, or GitHub Actions.`,
+  },
+  pythonDeveloper: {
+    title: 'Python Developer',
+    description:
+      `Job Title: Python Developer\n\n` +
+      `We are looking for a Python Developer to build scalable applications and automation systems.\n\n` +
+      `Requirements:\n` +
+      `- 3+ years of Python development experience (Django, Flask, FastAPI, or scripting).\n` +
+      `- Experience with data handling libraries: Pandas, NumPy, SQLAlchemy, or Celery.\n` +
+      `- Proficient in working with relational databases: PostgreSQL or MySQL via ORM (SQLAlchemy/Django ORM).\n` +
+      `- Knowledge of async programming, multithreading, and performance optimization.\n` +
+      `- Familiar with cloud services (AWS S3, Lambda, GCP) and containerization (Docker).\n` +
+      `- Strong knowledge of unit testing with Pytest and code quality tools.`,
+  },
+  dataAnalyst: {
+    title: 'Data Analyst',
+    description:
+      `Job Title: Data Analyst\n\n` +
+      `We are hiring a Data Analyst to extract actionable insights from complex datasets.\n\n` +
+      `Requirements:\n` +
+      `- 2+ years of experience in data analysis using Python (Pandas, NumPy) or R.\n` +
+      `- Advanced SQL skills for querying large datasets across BigQuery, PostgreSQL, or Redshift.\n` +
+      `- Proficiency in BI tools: Tableau, Power BI, Looker, or Google Data Studio.\n` +
+      `- Strong understanding of statistical analysis, A/B testing, and hypothesis testing.\n` +
+      `- Experience cleaning, transforming, and modeling raw data into structured reports.\n` +
+      `- Excellent communication skills to present findings to both technical and business stakeholders.`,
+  },
+  dataScientist: {
+    title: 'Data Scientist',
+    description:
+      `Job Title: Data Scientist\n\n` +
+      `We are looking for a Data Scientist to build predictive models and drive data-driven strategies.\n\n` +
+      `Requirements:\n` +
+      `- 3+ years of experience in data science using Python (scikit-learn, TensorFlow, PyTorch) or R.\n` +
+      `- Strong background in machine learning, statistical modeling, and feature engineering.\n` +
+      `- Experience with large-scale data pipelines using Spark, Airflow, or Kafka.\n` +
+      `- Proficiency in SQL and NoSQL databases for data extraction and exploration.\n` +
+      `- Familiarity with model deployment using MLflow, Docker, or cloud ML services.\n` +
+      `- PhD or Master's degree in Statistics, Mathematics, or Computer Science preferred.`,
+  },
+  mlEngineer: {
+    title: 'Machine Learning Engineer',
+    description:
+      `Job Title: Machine Learning Engineer\n\n` +
+      `We are seeking a Machine Learning Engineer to productionize ML models at scale.\n\n` +
+      `Requirements:\n` +
+      `- 3+ years of experience building and deploying machine learning systems in production.\n` +
+      `- Proficiency in Python, TensorFlow, PyTorch, and the broader ML ecosystem (Hugging Face, XGBoost).\n` +
+      `- Strong experience with ML pipelines: data ingestion, training, evaluation, and inference.\n` +
+      `- Knowledge of MLOps: experiment tracking (MLflow/W&B), model versioning, CI/CD for ML.\n` +
+      `- Experience with cloud ML platforms: AWS SageMaker, GCP Vertex AI, or Azure ML.\n` +
+      `- Solid software engineering skills including system design, testing, and code reviews.`,
+  },
+  devopsEngineer: {
+    title: 'DevOps Engineer',
+    description:
+      `Job Title: DevOps Engineer\n\n` +
+      `We are hiring a DevOps Engineer to build and maintain our infrastructure and deployment pipelines.\n\n` +
+      `Requirements:\n` +
+      `- 3+ years of experience in DevOps, Site Reliability Engineering, or infrastructure automation.\n` +
+      `- Proficiency with containerization (Docker) and orchestration (Kubernetes, Helm).\n` +
+      `- Experience with CI/CD tools: GitHub Actions, Jenkins, GitLab CI, or CircleCI.\n` +
+      `- Infrastructure as Code (IaC) expertise with Terraform, Ansible, or Pulumi.\n` +
+      `- Deep knowledge of Linux systems, shell scripting, and cloud platforms (AWS/GCP/Azure).\n` +
+      `- Monitoring and observability experience with Prometheus, Grafana, Datadog, or ELK Stack.`,
+  },
+  cloudEngineer: {
+    title: 'Cloud Engineer',
+    description:
+      `Job Title: Cloud Engineer\n\n` +
+      `We are looking for a Cloud Engineer to architect and manage scalable cloud infrastructure.\n\n` +
+      `Requirements:\n` +
+      `- 3+ years of cloud engineering experience on AWS, Google Cloud Platform, or Azure.\n` +
+      `- AWS/GCP/Azure certifications (Solutions Architect, Cloud Engineer, or DevOps Engineer).\n` +
+      `- Expertise in cloud networking: VPC, subnets, load balancers, CDN, and DNS management.\n` +
+      `- Experience with serverless architectures: AWS Lambda, Cloud Functions, or Azure Functions.\n` +
+      `- Infrastructure as Code using Terraform, CloudFormation, or Deployment Manager.\n` +
+      `- Strong security practices: IAM, encryption, compliance standards (SOC 2, GDPR).`,
+  },
+  cybersecurity: {
+    title: 'Cybersecurity Analyst',
+    description:
+      `Job Title: Cybersecurity Analyst\n\n` +
+      `We are seeking a Cybersecurity Analyst to protect our systems, networks, and data assets.\n\n` +
+      `Requirements:\n` +
+      `- 3+ years of experience in information security, threat analysis, or SOC operations.\n` +
+      `- Proficiency with SIEM platforms: Splunk, Microsoft Sentinel, or IBM QRadar.\n` +
+      `- Experience in vulnerability assessment, penetration testing, and incident response.\n` +
+      `- Knowledge of security frameworks: NIST, ISO 27001, CIS Controls, or MITRE ATT&CK.\n` +
+      `- Relevant certifications: CISSP, CEH, CompTIA Security+, or CISM preferred.\n` +
+      `- Strong understanding of networking protocols, firewalls, VPNs, and endpoint protection.`,
+  },
+  uiuxDesigner: {
+    title: 'UI/UX Designer',
+    description:
+      `Job Title: UI/UX Designer\n\n` +
+      `We are hiring a UI/UX Designer to create intuitive, beautiful digital experiences for our users.\n\n` +
+      `Requirements:\n` +
+      `- 3+ years of UI/UX design experience for web and/or mobile applications.\n` +
+      `- Proficiency with design tools: Figma, Sketch, Adobe XD, or InVision.\n` +
+      `- Strong portfolio demonstrating user-centered design processes, wireframes, and prototypes.\n` +
+      `- Experience conducting user research, usability testing, and translating insights into designs.\n` +
+      `- Knowledge of design systems, component libraries, and accessibility standards (WCAG 2.1).\n` +
+      `- Ability to collaborate closely with product managers and engineers in Agile workflows.`,
+  },
+  qaEngineer: {
+    title: 'QA Engineer',
+    description:
+      `Job Title: QA Engineer\n\n` +
+      `We are looking for a QA Engineer to ensure the quality and reliability of our software products.\n\n` +
+      `Requirements:\n` +
+      `- 3+ years of software quality assurance experience in manual and automated testing.\n` +
+      `- Proficiency with test automation frameworks: Selenium, Cypress, Playwright, or Appium.\n` +
+      `- Experience writing and maintaining comprehensive test plans, test cases, and bug reports.\n` +
+      `- Familiarity with API testing using Postman, RestAssured, or similar tools.\n` +
+      `- Knowledge of CI/CD integration for automated test pipelines (GitHub Actions, Jenkins).\n` +
+      `- Strong analytical skills to identify root causes and collaborate with engineering teams.`,
+  },
+  productManager: {
+    title: 'Product Manager',
+    description:
+      `Job Title: Product Manager\n\n` +
+      `We are hiring a Product Manager to define product vision and drive delivery across cross-functional teams.\n\n` +
+      `Requirements:\n` +
+      `- 4+ years of product management experience in SaaS, mobile, or platform products.\n` +
+      `- Proven ability to define product roadmaps, write user stories, and prioritize backlogs.\n` +
+      `- Experience with data-driven decision-making using tools like Mixpanel, Amplitude, or Google Analytics.\n` +
+      `- Strong stakeholder management and communication skills across engineering, design, and business.\n` +
+      `- Familiarity with Agile/Scrum methodologies, sprint planning, and OKR frameworks.\n` +
+      `- MBA or Bachelor's degree in Business, Computer Science, or equivalent experience.`,
+  },
+  businessAnalyst: {
+    title: 'Business Analyst',
+    description:
+      `Job Title: Business Analyst\n\n` +
+      `We are seeking a Business Analyst to bridge business needs and technology solutions.\n\n` +
+      `Requirements:\n` +
+      `- 3+ years of experience in business analysis, requirements gathering, or process improvement.\n` +
+      `- Proficiency in business process modeling (BPMN) and requirements documentation (BRD, FRD).\n` +
+      `- Experience with Agile/Scrum and familiarity with project management tools (Jira, Confluence).\n` +
+      `- Ability to perform gap analysis, stakeholder interviews, and workflow optimization.\n` +
+      `- Strong SQL skills for data querying and validation in enterprise systems.\n` +
+      `- Excellent written and verbal communication for presenting findings to senior leadership.`,
+  },
+  sysAdmin: {
+    title: 'System Administrator',
+    description:
+      `Job Title: System Administrator\n\n` +
+      `We are hiring a System Administrator to manage and maintain IT infrastructure and systems.\n\n` +
+      `Requirements:\n` +
+      `- 3+ years of experience in Linux and Windows Server administration.\n` +
+      `- Strong skills in network configuration: DNS, DHCP, TCP/IP, VPN, and firewall management.\n` +
+      `- Experience with virtualization technologies: VMware, Hyper-V, or KVM.\n` +
+      `- Proficiency in scripting for automation: Bash, PowerShell, or Python.\n` +
+      `- Familiarity with Active Directory, LDAP, and enterprise identity management.\n` +
+      `- Experience with backup strategies, disaster recovery planning, and security hardening.`,
+  },
+};
+
 export default function ATSAnalyzer({
   resumes,
   userUid,
@@ -65,6 +293,7 @@ export default function ATSAnalyzer({
 }: ATSAnalyzerProps) {
   // Input states
   const [activeMode, setActiveMode] = useState<Mode>('upload');
+  const [jdCategory, setJdCategory] = useState<string>('softwareEngineer');
   const [selectedResumeId, setSelectedResumeId] = useState<string>('');
   const [jobDescription, setJobDescription] = useState('');
   
@@ -89,19 +318,12 @@ export default function ATSAnalyzer({
   // Cancellation tokens
   const isCancelledRef = useRef<boolean>(false);
 
-  // Auto-fill mock job description to help user start rapidly
-  const fillSampleJobDescription = () => {
-    setJobDescription(
-      `Job Title: Senior React software engineer\n\n` +
-      `Requirements:\n` +
-      `- 5+ years of experience with React, TypeScript, and modern JS ecosystems.\n` +
-      `- Hands-on skills in State management using Redux, Context API, or Zustand.\n` +
-      `- Deep experience in building full-stack applications with Node.js, Express, and databases like PostgreSQL, Firebase FireStore, or Mysql.\n` +
-      `- Familiarity with Docker containers, AWS, CI/CD pipelines, and cloud deployments like Cloud Run.\n` +
-      `- Excellent soft skills such as Scrum, leadership, collaboration, and high-performance communication.\n` +
-      `- Degree in computer science or equivalent certification.`
-    );
-    showToasts('Loaded React Developer Job Description!', 'success');
+  // Load sample JD from the library by selected category
+  const loadSampleJD = () => {
+    const entry = JD_LIBRARY[jdCategory];
+    if (!entry) return;
+    setJobDescription(entry.description);
+    showToasts(`Loaded "${entry.title}" sample job description!`, 'success');
   };
 
   // Load parent resume options
@@ -258,22 +480,7 @@ export default function ATSAnalyzer({
 
         setProgressStep('parsing');
         setProgressStatusMsg('Compiling preset database profile content...');
-        extractedRawText = `
-          Full Name: ${selectedResume.personalDetails.fullName}
-          Specialty: ${selectedResume.personalDetails.professionalTitle}
-          Summary: ${selectedResume.summary}
-          Email: ${selectedResume.personalDetails.email}
-          Phone: ${selectedResume.personalDetails.phone}
-          Education: ${selectedResume.education.map(e => `${e.degree} at ${e.institution}`).join(', ')}
-          Experience: ${selectedResume.experience.map(e => `${e.title} at ${e.company}: ${e.description}`).join('; ')}
-          Skills List: ${[
-            selectedResume.skills.programmingLanguages,
-            selectedResume.skills.frameworks,
-            selectedResume.skills.tools,
-            selectedResume.skills.databases,
-            selectedResume.skills.softSkills
-          ].flat().join(', ')}
-        `;
+        extractedRawText = serializeResumeBySectionOrder(selectedResume);
       }
 
       if (isCancelledRef.current) return;
@@ -497,14 +704,7 @@ export default function ATSAnalyzer({
                 <FileText className="h-4 w-4 text-indigo-500" />
                 <span>1. Target Position parameters</span>
               </h3>
-              <button 
-                onClick={fillSampleJobDescription}
-                className="text-[9px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/45 px-2.5 py-1 rounded transition hover:bg-indigo-100/60 cursor-pointer"
-              >
-                Insert Sample React JD
-              </button>
             </div>
-
             <textarea
               value={jobDescription}
               onChange={e => setJobDescription(e.target.value)}
@@ -772,12 +972,21 @@ export default function ATSAnalyzer({
               <p className="text-xs text-gray-400 max-w-xs mt-1 mb-6">
                 Paste your target job specs on the left column, upload your resume PDF, Word, or Image, and compile diagnostic checks.
               </p>
-              <div className="flex gap-4">
-                <button
-                  onClick={fillSampleJobDescription}
-                  className="px-4 py-2 border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-900 text-gray-600 dark:text-gray-400 text-xs font-bold rounded-xl transition cursor-pointer"
+              <div className="flex gap-2 flex-wrap justify-center">
+                <select
+                  value={jdCategory}
+                  onChange={e => setJdCategory(e.target.value)}
+                  className="px-3 py-2 border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-400 text-xs font-semibold rounded-xl outline-none cursor-pointer"
                 >
-                  Load Sample Job
+                  {Object.entries(JD_LIBRARY).map(([key, val]) => (
+                    <option key={key} value={key}>{val.title}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={loadSampleJD}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+                >
+                  Load Sample JD
                 </button>
               </div>
             </div>

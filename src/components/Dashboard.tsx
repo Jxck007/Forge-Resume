@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ResumeData, UserSettings } from '../types';
+import { ResumeData, TemplateId, UserSettings } from '../types';
 import {
   Plus,
   ArrowRight,
@@ -16,18 +16,26 @@ import {
   ChevronRight,
   Sparkles,
   Upload,
+  FileDown,
+  Image as ImageIcon,
+  ClipboardList,
+  X,
+  CheckCircle2,
+  AlertCircle,
 } from 'lucide-react';
 import ConfirmationDialog from './ConfirmationDialog';
+import { extractResumeText, getImportAccept, ResumeImportMode, validateImportFile } from '../utils/resumeImport';
 
 interface DashboardProps {
   resumes: ResumeData[];
   settings: UserSettings | null;
-  onCreateNew: (title: string, templateId: string) => Promise<void>;
+  onCreateNew: (title: string, templateId: TemplateId) => Promise<void>;
   onDuplicate: (resume: ResumeData) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onToggleArchive: (id: string, state: boolean) => Promise<void>;
   onSelectResume: (id: string) => void;
-  onImportResume: (rawText: string) => Promise<void>;
+  onParseImport: (rawText: string) => Promise<Partial<ResumeData>>;
+  onSaveImport: (parsedData: Partial<ResumeData>) => Promise<void>;
   setActiveTab: (tab: 'dashboard' | 'builder' | 'ats' | 'settings') => void;
   showToasts: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
@@ -40,16 +48,23 @@ export default function Dashboard({
   onDelete,
   onToggleArchive,
   onSelectResume,
-  onImportResume,
+  onParseImport,
+  onSaveImport,
   setActiveTab,
   showToasts,
 }: DashboardProps) {
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
-  const [newTemplate, setNewTemplate] = useState('modern');
+  const [newTemplate, setNewTemplate] = useState<TemplateId>('modern');
+  const [importMode, setImportMode] = useState<ResumeImportMode>('pdf');
   const [pastedText, setPastedText] = useState('');
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [reviewData, setReviewData] = useState<Partial<ResumeData> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [loadingAction, setLoadingAction] = useState(false);
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<{
     isOpen: boolean;
     resumeId: string;
@@ -63,10 +78,6 @@ export default function Dashboard({
   // Computed metrics
   const activeResumes = resumes.filter(r => !r.isArchived);
   const totalCount = resumes.length;
-  const lastModified = [...resumes].sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-  )[0];
-
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim()) {
@@ -85,45 +96,157 @@ export default function Dashboard({
     }
   };
 
-  const handleImportSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!pastedText.trim()) {
-      showToasts('Please paste some resume text so the AI can extract sections.', 'info');
-      return;
+  const handleDuplicateClick = async (resume: ResumeData) => {
+    if (duplicatingId || loadingAction) return;
+    setDuplicatingId(resume.id);
+    try {
+      await onDuplicate(resume);
+    } catch {
+      showToasts('Duplication request failed.', 'error');
+    } finally {
+      setDuplicatingId(null);
     }
-    const isAiConfigured = 
-      (settings?.aiProvider === 'Gemini' && settings?.geminiApiKey) ||
-      (settings?.aiProvider === 'OpenAI' && settings?.openaiApiKey) ||
-      (settings?.aiProvider === 'OpenRouter' && settings?.openRouterApiKey) ||
-      ((settings?.aiProvider === 'Groq' || !settings?.aiProvider) && settings?.groqApiKey);
+  };
 
+  const handleArchiveClick = async (id: string, archived: boolean) => {
+    if (archivingId || loadingAction) return;
+    setArchivingId(id);
+    try {
+      await onToggleArchive(id, archived);
+    } finally {
+      setArchivingId(null);
+    }
+  };
+
+  const handleDeleteConfirm = async () => {
+    await onDelete(deleteDialog.resumeId);
+    setDeleteDialog({ isOpen: false, resumeId: '', resumeTitle: '' });
+  };
+
+  const isAiConfigured = Boolean(
+    (settings?.aiProvider === 'Gemini' && settings?.geminiApiKey) ||
+    (settings?.aiProvider === 'OpenAI' && settings?.openaiApiKey) ||
+    (settings?.aiProvider === 'OpenRouter' && settings?.openRouterApiKey) ||
+    ((settings?.aiProvider === 'Groq' || !settings?.aiProvider) && settings?.groqApiKey)
+  );
+
+  const resetImport = () => {
+    setImportOpen(false);
+    setImportMode('pdf');
+    setPastedText('');
+    setImportFile(null);
+    setReviewData(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const selectImportMode = (mode: ResumeImportMode) => {
+    setImportMode(mode);
+    setImportFile(null);
+    setReviewData(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleImportParse = async () => {
     if (!isAiConfigured) {
-      showToasts(`Please configure your ${settings?.aiProvider || 'Groq'} API Key in Settings to parse via AI.`, 'error');
+      showToasts(`Configure your ${settings?.aiProvider || 'Groq'} API key in Settings before importing.`, 'error');
       return;
     }
+
     setLoadingAction(true);
     try {
-      await onImportResume(pastedText.trim());
-      setImportOpen(false);
-      setPastedText('');
-      showToasts('Resume parsed and pre-filled with dynamic sections!', 'success');
-    } catch (err: any) {
-      showToasts(err?.message || 'AI parsing unsuccessful.', 'error');
+      let rawText = pastedText.trim();
+      if (importMode !== 'text') {
+        if (!importFile) {
+          showToasts(`Choose a ${importMode.toUpperCase()} file first.`, 'info');
+          return;
+        }
+        const fileError = validateImportFile(importFile, importMode);
+        if (fileError) {
+          showToasts(fileError, 'error');
+          return;
+        }
+        showToasts('Extracting resume text...', 'info');
+        rawText = (await extractResumeText(importFile, importMode)).trim();
+      }
+
+      if (!rawText) {
+        showToasts('No readable resume text was found. Try another file or paste text.', 'error');
+        return;
+      }
+
+      showToasts('Structuring resume data with AI...', 'info');
+      setReviewData(await onParseImport(rawText));
+    } catch (error: unknown) {
+      showToasts(error instanceof Error ? error.message : 'Resume import failed.', 'error');
     } finally {
       setLoadingAction(false);
     }
   };
+
+  const handleImportSave = async () => {
+    if (!reviewData) return;
+    setLoadingAction(true);
+    try {
+      await onSaveImport(reviewData);
+      resetImport();
+      showToasts('Imported resume saved.', 'success');
+    } catch (error: unknown) {
+      showToasts(error instanceof Error ? error.message : 'Unable to save imported resume.', 'error');
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  const reviewSections = reviewData ? [
+    {
+      label: 'Personal details',
+      ready: Boolean(reviewData.personalDetails?.fullName || reviewData.personalDetails?.email),
+      detail: [reviewData.personalDetails?.fullName, reviewData.personalDetails?.professionalTitle]
+        .filter(Boolean).join(' · ') || 'Not detected',
+    },
+    {
+      label: 'Professional summary',
+      ready: Boolean(reviewData.summary),
+      detail: reviewData.summary?.slice(0, 120) || 'Not detected',
+    },
+    {
+      label: 'Experience',
+      ready: Boolean(reviewData.experience?.length),
+      detail: `${reviewData.experience?.length || 0} entries`,
+    },
+    {
+      label: 'Education',
+      ready: Boolean(reviewData.education?.length),
+      detail: `${reviewData.education?.length || 0} entries`,
+    },
+    {
+      label: 'Projects',
+      ready: Boolean(reviewData.projects?.length),
+      detail: `${reviewData.projects?.length || 0} entries`,
+    },
+    {
+      label: 'Skills',
+      ready: Object.values(reviewData.skills || {}).some(values => values?.length),
+      detail: Object.values(reviewData.skills || {}).flat().slice(0, 6).join(', ') || 'Not detected',
+    },
+    {
+      label: 'Certifications and achievements',
+      ready: Boolean(reviewData.certifications?.length || reviewData.achievements?.length),
+      detail: `${(reviewData.certifications?.length || 0) + (reviewData.achievements?.length || 0)} entries`,
+    },
+  ] : [];
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 font-sans">
       {/* Top: Welcome & Actions */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-white mb-2">
-            Dashboard
+          <span className="forge-eyebrow">Career workspace</span>
+          <h2 className="text-3xl font-bold tracking-tight text-white mt-2 mb-2">
+            Build your next application
           </h2>
-          <p className="text-sm font-medium text-zinc-400">
-            Manage your resumes, analyze against ATS, and prepare for your next role.
+          <p className="text-sm text-zinc-400">
+            Keep every resume targeted, measurable, and ready for recruiters.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -132,7 +255,7 @@ export default function Dashboard({
             className="flex items-center space-x-2 rounded-xl bg-[#171A21] border border-[#2A2E37] hover:bg-[#1f232c] hover:border-zinc-700 px-4 py-2.5 text-sm font-semibold text-zinc-300 shadow-sm transition-all cursor-pointer"
           >
             <Upload className="h-4 w-4" />
-            <span>AI Import</span>
+            <span>Import resume</span>
           </button>
           <button
             onClick={() => setCreateOpen(true)}
@@ -174,30 +297,22 @@ export default function Dashboard({
 
         <div className="rounded-2xl border border-[#2A2E37] bg-[#171A21] p-6 shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between mb-4">
-            <span className="text-xs font-semibold uppercase tracking-widest text-zinc-500">Recent Update</span>
+            <span className="text-xs font-semibold uppercase tracking-widest text-zinc-500">ATS Reports</span>
             <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400">
               <Award className="h-4 w-4" />
             </div>
           </div>
           <div className="flex flex-col justify-end h-full">
-            {lastModified ? (
-              <>
-                <p className="text-sm font-bold text-white truncate mb-1">
-                  {lastModified.title}
-                </p>
-                <p className="text-xs font-medium text-zinc-500 truncate">
-                  {new Date(lastModified.updatedAt).toLocaleDateString()}
-                </p>
-              </>
-            ) : (
-              <p className="text-sm font-semibold text-zinc-500">No recent updates</p>
-            )}
+            <button onClick={() => setActiveTab('ats')} className="text-left group">
+              <span className="text-xl font-bold text-white group-hover:text-emerald-300 transition">Analyze now</span>
+              <p className="text-xs text-zinc-500 mt-1">Check match score and missing keywords</p>
+            </button>
           </div>
         </div>
 
         <div className="rounded-2xl border border-[#2A2E37] bg-[#171A21] p-6 shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between mb-4">
-            <span className="text-xs font-semibold uppercase tracking-widest text-zinc-500">Global Sync</span>
+            <span className="text-xs font-semibold uppercase tracking-widest text-zinc-500">Profile Completion</span>
             <div className={`p-2 rounded-lg ${settings?.hasCompletedProfile ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
               <Star className="h-4 w-4" />
             </div>
@@ -207,10 +322,20 @@ export default function Dashboard({
               {settings?.hasCompletedProfile ? 'Ready' : 'Incomplete'}
             </span>
             <p className="text-xs text-zinc-500 font-medium">
-              {settings?.hasCompletedProfile ? 'Profile auto-inject active' : 'Complete profile to enable'}
+              {settings?.hasCompletedProfile ? 'Career details ready to reuse' : 'Add profile details to save time'}
             </p>
           </div>
         </div>
+      </div>
+
+      <div className="forge-quick-actions">
+        <div>
+          <span className="forge-eyebrow">Quick actions</span>
+          <h3>Move your application forward</h3>
+        </div>
+        <button onClick={() => setCreateOpen(true)}><Plus /><span><strong>Create resume</strong><small>Start from a professional template</small></span></button>
+        <button onClick={() => setActiveTab('ats')}><Activity /><span><strong>Run ATS analysis</strong><small>Compare a resume with a job description</small></span></button>
+        <button onClick={() => setImportOpen(true)}><Upload /><span><strong>Import existing resume</strong><small>Bring your current content into Forge</small></span></button>
       </div>
 
       {/* Bottom: Recent Resumes */}
@@ -285,18 +410,28 @@ export default function Dashboard({
 
                   <div className="flex items-center space-x-1">
                     <button
-                      onClick={() => onDuplicate(r)}
-                      className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+                      onClick={() => handleDuplicateClick(r)}
+                      disabled={duplicatingId === r.id || !!duplicatingId}
+                      className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Duplicate"
                     >
-                      <Copy className="h-4 w-4" />
+                      {duplicatingId === r.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
                     </button>
                     <button
-                      onClick={() => onToggleArchive(r.id, true)}
-                      className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+                      onClick={() => handleArchiveClick(r.id, true)}
+                      disabled={archivingId === r.id || !!archivingId}
+                      className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Archive"
                     >
-                      <Archive className="h-4 w-4" />
+                      {archivingId === r.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Archive className="h-4 w-4" />
+                      )}
                     </button>
                     <button
                       onClick={() => {
@@ -343,10 +478,11 @@ export default function Dashboard({
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <button
-                      onClick={() => onToggleArchive(r.id, false)}
-                      className="px-3 py-1.5 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-zinc-300 hover:text-white hover:bg-zinc-800 text-xs font-semibold shadow-sm transition-colors cursor-pointer"
+                      onClick={() => handleArchiveClick(r.id, false)}
+                      disabled={archivingId === r.id || !!archivingId}
+                      className="px-3 py-1.5 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-zinc-300 hover:text-white hover:bg-zinc-800 text-xs font-semibold shadow-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      Restore
+                      {archivingId === r.id ? 'Restoring...' : 'Restore'}
                     </button>
                     <button
                       onClick={() => {
@@ -402,7 +538,7 @@ export default function Dashboard({
                   </label>
                   <select
                     value={newTemplate}
-                    onChange={e => setNewTemplate(e.target.value)}
+                    onChange={e => setNewTemplate(e.target.value as TemplateId)}
                     className="w-full px-4 py-2.5 rounded-xl border border-[#2A2E37] bg-[#0F1115] text-sm text-white focus:border-indigo-500 outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
                   >
                     <option value="modern">Modern Professional</option>
@@ -450,74 +586,152 @@ export default function Dashboard({
               initial={{ scale: 0.95, opacity: 0, y: 10 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 10 }}
-              className="w-full max-w-lg rounded-2xl border border-[#2A2E37] bg-[#171A21] p-6 shadow-2xl"
+              className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-[#2A2E37] bg-[#171A21] shadow-2xl"
               onClick={e => e.stopPropagation()}
             >
-              <h3 className="text-xl font-bold text-white flex items-center gap-2 mb-2">
-                <Sparkles className="h-5 w-5 text-indigo-400" />
-                <span>AI Parsing Extractor</span>
-              </h3>
-              <p className="text-sm text-zinc-400 mb-6 font-medium leading-relaxed">
-                Paste your current resume content, LinkedIn Markdown, or unstructured text. Our AI will automatically extract and categorize your experience, education, skills, and certifications into a new document.
-              </p>
-
-              {!((settings?.aiProvider === 'Gemini' && settings?.geminiApiKey) ||
-                (settings?.aiProvider === 'OpenAI' && settings?.openaiApiKey) ||
-                (settings?.aiProvider === 'OpenRouter' && settings?.openRouterApiKey) ||
-                ((settings?.aiProvider === 'Groq' || !settings?.aiProvider) && settings?.groqApiKey)) && (
-                <div className="mb-6 rounded-xl bg-amber-500/10 border border-amber-500/20 p-4 text-sm text-amber-400 font-medium leading-normal">
-                  You must have an AI Provider API Key set up to parse via AI. Configure this in Settings.
-                </div>
-              )}
-
-              <form onSubmit={handleImportSubmit} className="space-y-4">
+              <div className="flex items-start justify-between border-b border-[#2A2E37] p-6">
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex justify-between">
-                    <span>Unstructured Resume Content</span>
-                    <span className="text-zinc-500 font-medium">Auto-formats to Modern Template</span>
-                  </label>
-                  <textarea
-                    value={pastedText}
-                    onChange={e => setPastedText(e.target.value)}
-                    rows={8}
-                    placeholder="John Doe&#10;Email: john@example.com&#10;&#10;EXPERIENCE&#10;Software Engineer at Acme Corp (2020 - Present)&#10;- Built reliable React applications..."
-                    className="w-full p-4 rounded-xl border border-[#2A2E37] bg-[#0F1115] text-sm text-zinc-300 placeholder:text-zinc-600 focus:border-indigo-500 outline-none font-mono resize-none focus:ring-2 focus:ring-indigo-500/20 transition-all custom-scrollbar flex-1"
-                    required
-                  />
+                  <h3 className="flex items-center gap-2 text-xl font-bold text-white">
+                    <Upload className="h-5 w-5 text-emerald-300" />
+                    <span>{reviewData ? 'Review imported resume' : 'Import existing resume'}</span>
+                  </h3>
+                  <p className="mt-1 text-sm font-medium leading-relaxed text-zinc-400">
+                    {reviewData
+                      ? 'Verify the extracted sections before creating a new Forge resume.'
+                      : 'Choose one source. Files are converted to text, then structured with your configured AI provider.'}
+                  </p>
                 </div>
+                <button
+                  type="button"
+                  onClick={resetImport}
+                  className="rounded-lg p-2 text-zinc-500 transition hover:bg-zinc-800 hover:text-white"
+                  aria-label="Close import"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
 
-                <div className="flex justify-between items-center pt-4 border-t border-[#2A2E37]">
-                  <span className="text-xs text-zinc-500 font-medium">
-                    Max 10,000 characters
-                  </span>
-                  <div className="flex gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setImportOpen(false)}
-                      className="px-4 py-2 rounded-xl text-sm font-semibold text-zinc-400 hover:text-white hover:bg-[#2A2E37] transition-colors cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={loadingAction || !((settings?.aiProvider === 'Gemini' && settings?.geminiApiKey) ||
-                        (settings?.aiProvider === 'OpenAI' && settings?.openaiApiKey) ||
-                        (settings?.aiProvider === 'OpenRouter' && settings?.openRouterApiKey) ||
-                        ((settings?.aiProvider === 'Groq' || !settings?.aiProvider) && settings?.groqApiKey))}
-                      className="flex items-center space-x-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 px-5 py-2 text-sm font-semibold text-white shadow-md transition-all active:scale-[0.98] disabled:opacity-50 cursor-pointer"
-                    >
-                      {loadingAction ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <>
-                          <Sparkles className="h-4 w-4" />
-                          <span>Extract Data</span>
-                        </>
-                      )}
-                    </button>
+              <div className="flex-1 overflow-y-auto p-6">
+                {!reviewData ? (
+                  <div className="space-y-5">
+                    {!isAiConfigured && (
+                      <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm font-medium text-amber-300">
+                        Configure your {settings?.aiProvider || 'Groq'} API key in Settings before importing.
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {[
+                        { id: 'pdf' as const, label: 'Upload PDF', icon: FileText },
+                        { id: 'docx' as const, label: 'Upload DOCX', icon: FileDown },
+                        { id: 'image' as const, label: 'Upload Image', icon: ImageIcon },
+                        { id: 'text' as const, label: 'Paste Text', icon: ClipboardList },
+                      ].map(option => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => selectImportMode(option.id)}
+                          className={`flex min-h-24 flex-col items-center justify-center gap-2 rounded-xl border p-3 text-xs font-bold transition ${
+                            importMode === option.id
+                              ? 'border-emerald-400 bg-emerald-400/10 text-emerald-200'
+                              : 'border-zinc-700 bg-zinc-900/40 text-zinc-400 hover:border-zinc-600 hover:text-white'
+                          }`}
+                        >
+                          <option.icon className="h-5 w-5" />
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {importMode === 'text' ? (
+                      <div>
+                        <label className="mb-1.5 block text-xs font-semibold text-zinc-300">
+                          Resume text for AI import
+                        </label>
+                        <textarea
+                          value={pastedText}
+                          onChange={event => setPastedText(event.target.value)}
+                          rows={10}
+                          maxLength={10000}
+                          placeholder="Paste resume content here..."
+                          className="w-full resize-none rounded-xl border border-[#2A2E37] bg-[#0F1115] p-4 font-mono text-sm text-zinc-300 outline-none transition placeholder:text-zinc-600 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10"
+                        />
+                        <p className="mt-1 text-right text-[10px] text-zinc-500">{pastedText.length}/10,000</p>
+                      </div>
+                    ) : (
+                      <div>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept={getImportAccept(importMode)}
+                          onChange={event => setImportFile(event.target.files?.[0] || null)}
+                          className="hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="flex min-h-40 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-700 bg-zinc-900/30 p-6 text-center transition hover:border-emerald-400/70"
+                        >
+                          <Upload className="mb-3 h-7 w-7 text-emerald-300" />
+                          <strong className="text-sm text-white">
+                            {importFile ? importFile.name : `Choose ${importMode.toUpperCase()} file`}
+                          </strong>
+                          <span className="mt-1 text-xs text-zinc-500">
+                            {importMode === 'pdf' && 'Text extraction uses PDF.js'}
+                            {importMode === 'docx' && 'Text extraction uses Mammoth.js'}
+                            {importMode === 'image' && 'OCR uses Tesseract.js · JPG, PNG, or WEBP'}
+                          </span>
+                        </button>
+                      </div>
+                    )}
                   </div>
+                ) : (
+                  <div className="space-y-2">
+                    {reviewSections.map(section => (
+                      <div
+                        key={section.label}
+                        className={`flex items-start gap-3 rounded-xl border p-3.5 ${
+                          section.ready
+                            ? 'border-emerald-900/50 bg-emerald-950/15'
+                            : 'border-zinc-800 bg-zinc-900/30'
+                        }`}
+                      >
+                        {section.ready
+                          ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                          : <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-zinc-600" />}
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold uppercase tracking-wider text-zinc-200">{section.label}</p>
+                          <p className="mt-0.5 truncate text-xs text-zinc-500">{section.detail}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col-reverse gap-3 border-t border-[#2A2E37] p-6 sm:flex-row sm:items-center sm:justify-between">
+                <span className="text-xs text-zinc-500">
+                  {reviewData ? `${reviewSections.filter(section => section.ready).length} sections detected` : 'Nothing is saved until review is confirmed.'}
+                </span>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => reviewData ? setReviewData(null) : resetImport()}
+                    className="rounded-xl px-4 py-2 text-sm font-semibold text-zinc-400 transition hover:bg-[#2A2E37] hover:text-white"
+                  >
+                    {reviewData ? 'Back' : 'Cancel'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={reviewData ? handleImportSave : handleImportParse}
+                    disabled={loadingAction || !isAiConfigured || (!reviewData && importMode === 'text' && !pastedText.trim()) || (!reviewData && importMode !== 'text' && !importFile)}
+                    className="flex items-center gap-2 rounded-xl bg-emerald-400 px-5 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {loadingAction ? <Loader2 className="h-4 w-4 animate-spin" /> : reviewData ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+                    <span>{reviewData ? 'Save Imported Resume' : 'Extract and Review'}</span>
+                  </button>
                 </div>
-              </form>
+              </div>
             </motion.div>
           </div>
         )}
@@ -526,9 +740,7 @@ export default function Dashboard({
       <ConfirmationDialog
         isOpen={deleteDialog.isOpen}
         onClose={() => setDeleteDialog({ isOpen: false, resumeId: '', resumeTitle: '' })}
-        onConfirm={async () => {
-          await onDelete(deleteDialog.resumeId);
-        }}
+        onConfirm={handleDeleteConfirm}
         title="Delete Resume Document?"
         message={`Are you sure you want to delete "${deleteDialog.resumeTitle}"? This will permanently delete the selected resume, historical records, and customized layout contents.`}
         confirmText="Delete Document"

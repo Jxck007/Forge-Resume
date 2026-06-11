@@ -79,14 +79,17 @@ export default function ProfileSetup({ onComplete, userEmail, dbConnected }: Pro
       uid: '', // filled by service
       personalDetails,
       summary,
+      careerObjective: '',
       education: [],
       experience: [],
+      internships: [],
       projects: [],
       skills,
       certifications: [],
       achievements: [],
       volunteering: [],
       languages: [],
+      customSections: [],
       updatedAt: new Date().toISOString(),
     };
     onComplete(profile);
@@ -99,8 +102,9 @@ export default function ProfileSetup({ onComplete, userEmail, dbConnected }: Pro
     const file = e.target.files?.[0];
     if (!file) return;
     setUploadError(null);
-    if (!file.type.startsWith('image/')) {
-      setUploadError("File is not a valid image.");
+    const supportedImageTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!supportedImageTypes.includes(file.type)) {
+      setUploadError('Use a JPG, JPEG, PNG, or WEBP image.');
       return;
     }
     const reader = new FileReader();
@@ -133,7 +137,7 @@ export default function ProfileSetup({ onComplete, userEmail, dbConnected }: Pro
           <div className="flex flex-wrap gap-2 justify-center sm:justify-start">
             <label className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-105 px-3 py-1.5 rounded-lg text-xs font-bold text-zinc-700 dark:text-white cursor-pointer transition shadow-xs">
               <span>Upload Image File</span>
-              <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUploadOnboard} />
+              <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={handlePhotoUploadOnboard} />
             </label>
             {personalDetails.profilePhoto && (
               <button

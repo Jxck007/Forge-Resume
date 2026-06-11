@@ -1,5 +1,9 @@
 import {
+  AuthCredential,
+  AuthError,
+  fetchSignInMethodsForEmail,
   GoogleAuthProvider,
+  linkWithCredential,
   signInWithPopup,
   signOut,
   signInWithEmailAndPassword,
@@ -21,8 +25,9 @@ import {
   getDocFromServer,
   onSnapshot,
 } from 'firebase/firestore';
-import { ResumeData, UserSettings, AtsReport, ProfileData } from '../types';
+import { ResumeData, UserSettings, AtsReport, ProfileData, TemplateId } from '../types';
 import { getAuthInstance, getDb, resetFirebaseConfiguration } from '../config/firebase';
+import { DEFAULT_SECTION_ORDER, normalizeSectionOrder } from '../utils/sectionOrder';
 
 // Firestore error handling with dedicated JSON payload as mandated by SKILL
 export enum OperationType {
@@ -74,56 +79,227 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 }
 
 // Authentication Helpers
+export class AuthActionError extends Error {
+  code: string;
+  email?: string;
+  signInMethods?: string[];
+
+  constructor(code: string, message: string, options?: { email?: string; signInMethods?: string[] }) {
+    super(message);
+    this.name = 'AuthActionError';
+    this.code = code;
+    this.email = options?.email;
+    this.signInMethods = options?.signInMethods;
+  }
+}
+
+let pendingGoogleCredential: AuthCredential | null = null;
+let pendingGoogleEmail = '';
+
+const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
+const providerLabel = (method: string) => {
+  switch (method) {
+    case 'password':
+      return 'email and password';
+    case 'google.com':
+      return 'Google';
+    case 'apple.com':
+      return 'Apple';
+    case 'github.com':
+      return 'GitHub';
+    case 'facebook.com':
+      return 'Facebook';
+    case 'microsoft.com':
+      return 'Microsoft';
+    default:
+      return method.replace('.com', '');
+  }
+};
+
+export function getAuthErrorMessage(error: unknown): string {
+  const code = error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code || '')
+    : '';
+
+  switch (code) {
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'The email or password is incorrect. Check your details or reset your password.';
+    case 'auth/email-already-in-use':
+      return 'An account already exists for this email. Sign in instead, or continue with Google if that is how you registered.';
+    case 'auth/invalid-email':
+      return 'Enter a valid email address.';
+    case 'auth/weak-password':
+      return 'Choose a stronger password with at least 6 characters.';
+    case 'auth/user-disabled':
+      return 'This account has been disabled. Contact support for help.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts were made. Wait a few minutes, then try again or reset your password.';
+    case 'auth/network-request-failed':
+      return 'Unable to reach the authentication service. Check your connection and try again.';
+    case 'auth/popup-closed-by-user':
+      return 'Google sign-in was cancelled before completion.';
+    case 'auth/popup-blocked':
+      return 'Your browser blocked the Google sign-in window. Allow pop-ups for this site and try again.';
+    case 'auth/cancelled-popup-request':
+      return 'A Google sign-in request is already in progress.';
+    case 'auth/unauthorized-domain':
+      return 'Google sign-in is not enabled for this domain. Contact the site administrator.';
+    case 'auth/operation-not-allowed':
+      return 'This sign-in method is not enabled. Contact the site administrator.';
+    case 'auth/account-exists-with-different-credential':
+      return 'An account already exists for this email with a different sign-in method.';
+    case 'auth/credential-already-in-use':
+      return 'This Google account is already linked to another Forge account.';
+    case 'auth/provider-already-linked':
+      return 'Google is already linked to this account.';
+    case 'auth/requires-recent-login':
+      return 'For security, sign in again before changing account methods.';
+    case 'auth/api-key-not-valid':
+      return 'Authentication is temporarily unavailable because the Firebase configuration is invalid.';
+    default:
+      return 'We could not complete authentication. Please try again.';
+  }
+}
+
+const toAuthActionError = (
+  error: unknown,
+  options?: { email?: string; signInMethods?: string[] }
+) => {
+  if (error instanceof AuthActionError) return error;
+  const code = error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code || 'auth/unknown')
+    : 'auth/unknown';
+  return new AuthActionError(code, getAuthErrorMessage(error), options);
+};
+
+const hasInvalidApiKey = (error: unknown) => {
+  if (!error || typeof error !== 'object') return false;
+  const code = 'code' in error ? String((error as { code?: unknown }).code || '') : '';
+  const message = 'message' in error ? String((error as { message?: unknown }).message || '') : '';
+  return code === 'auth/api-key-not-valid' || message.includes('api-key-not-valid');
+};
+
+export function clearPendingGoogleLink() {
+  pendingGoogleCredential = null;
+  pendingGoogleEmail = '';
+}
+
+const syncUserProfileAfterAuth = async (user: FirebaseUser) => {
+  try {
+    await syncUserProfile(user);
+  } catch (error) {
+    console.warn('Authentication succeeded, but profile synchronization is pending:', error);
+  }
+};
+
 export async function loginWithGoogle() {
   const finalAuth = getAuthInstance();
   const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+
   try {
     const result = await signInWithPopup(finalAuth, provider);
-    await syncUserProfile(result.user);
+    clearPendingGoogleLink();
+    await syncUserProfileAfterAuth(result.user);
     return result.user;
-  } catch (err: any) {
-    if (err?.message?.includes('api-key-not-valid') || err?.code === 'auth/api-key-not-valid') {
+  } catch (error: unknown) {
+    if (hasInvalidApiKey(error)) {
       resetFirebaseConfiguration();
     }
-    console.error('Google Sign-In Error:', err);
-    throw err;
+
+    const authError = error as AuthError;
+    if (authError?.code === 'auth/account-exists-with-different-credential') {
+      const email = normalizeEmail(String(authError.customData?.email || ''));
+      const credential = GoogleAuthProvider.credentialFromError(authError);
+      let signInMethods: string[] = [];
+
+      if (email) {
+        try {
+          signInMethods = await fetchSignInMethodsForEmail(finalAuth, email);
+        } catch {
+          signInMethods = [];
+        }
+      }
+
+      pendingGoogleCredential = credential;
+      pendingGoogleEmail = email;
+
+      const methodText = signInMethods.length > 0
+        ? providerLabel(signInMethods[0])
+        : 'your existing sign-in method';
+      throw new AuthActionError(
+        authError.code,
+        `An account already exists for ${email || 'this email'} using ${methodText}. Sign in with that method first to securely link Google.`,
+        { email, signInMethods }
+      );
+    }
+
+    console.error('Google Sign-In Error:', error);
+    throw toAuthActionError(error);
   }
 }
 
 export async function loginWithEmail(email: string, pass: string) {
+  const normalizedEmail = normalizeEmail(email);
+
   try {
-    const result = await signInWithEmailAndPassword(getAuthInstance(), email, pass);
-    await syncUserProfile(result.user);
+    const auth = getAuthInstance();
+    if (pendingGoogleCredential && pendingGoogleEmail !== normalizedEmail) {
+      clearPendingGoogleLink();
+    }
+    const result = await signInWithEmailAndPassword(auth, normalizedEmail, pass);
+
+    if (pendingGoogleCredential && pendingGoogleEmail === normalizedEmail) {
+      try {
+        await linkWithCredential(result.user, pendingGoogleCredential);
+        clearPendingGoogleLink();
+      } catch (linkError: unknown) {
+        const code = linkError && typeof linkError === 'object' && 'code' in linkError
+          ? String((linkError as { code?: unknown }).code || '')
+          : '';
+        if (code !== 'auth/provider-already-linked') {
+          await signOut(auth);
+          throw toAuthActionError(linkError);
+        }
+        clearPendingGoogleLink();
+      }
+    }
+
+    await syncUserProfileAfterAuth(result.user);
     return result.user;
-  } catch (err: any) {
-    if (err?.message?.includes('api-key-not-valid') || err?.code === 'auth/api-key-not-valid') {
+  } catch (error: unknown) {
+    if (hasInvalidApiKey(error)) {
       resetFirebaseConfiguration();
     }
-    console.error('Email Sign-In Error:', err);
-    throw err;
+    console.error('Email Sign-In Error:', error);
+    throw toAuthActionError(error);
   }
 }
 
 export async function registerWithEmail(email: string, pass: string) {
   try {
-    const result = await createUserWithEmailAndPassword(getAuthInstance(), email, pass);
-    await syncUserProfile(result.user);
+    clearPendingGoogleLink();
+    const result = await createUserWithEmailAndPassword(getAuthInstance(), normalizeEmail(email), pass);
+    await syncUserProfileAfterAuth(result.user);
     return result.user;
-  } catch (err: any) {
-    if (err?.message?.includes('api-key-not-valid') || err?.code === 'auth/api-key-not-valid') {
+  } catch (error: unknown) {
+    if (hasInvalidApiKey(error)) {
       resetFirebaseConfiguration();
     }
-    console.error('Email Registration Error:', err);
-    throw err;
+    console.error('Email Registration Error:', error);
+    throw toAuthActionError(error);
   }
 }
 
 export async function handleForgotPassword(email: string) {
   try {
-    await sendPasswordResetEmail(getAuthInstance(), email);
-  } catch (err) {
-    console.error('Password Reset Error:', err);
-    throw err;
+    await sendPasswordResetEmail(getAuthInstance(), normalizeEmail(email));
+  } catch (error: unknown) {
+    console.error('Password Reset Error:', error);
+    throw toAuthActionError(error);
   }
 }
 
@@ -207,7 +383,7 @@ export async function saveUserProfile(uid: string, data: ProfileData): Promise<v
 }
 
 // Resume Operations
-export async function createNewResume(userId: string, title: string, templateId: string = 'modern', initialData?: Partial<ResumeData>): Promise<ResumeData> {
+export async function createNewResume(userId: string, title: string, templateId: TemplateId = 'modern', initialData?: Partial<ResumeData>): Promise<ResumeData> {
   const id = 'res_' + Math.random().toString(36).substring(2, 11);
   const now = new Date().toISOString();
   
@@ -216,6 +392,7 @@ export async function createNewResume(userId: string, title: string, templateId:
     userId,
     title,
     templateId,
+    useProfilePhoto: initialData?.useProfilePhoto ?? true,
     personalDetails: {
       fullName: '',
       professionalTitle: '',
@@ -245,7 +422,10 @@ export async function createNewResume(userId: string, title: string, templateId:
     languages: initialData?.languages || [],
     customSections: initialData?.customSections || [],
     internships: initialData?.internships || [],
-    sectionOrder: initialData?.sectionOrder || ['summary', 'experience', 'internships', 'education', 'skills', 'projects', 'certifications', 'achievements', 'volunteering', 'languages'],
+    sectionOrder: normalizeSectionOrder(
+      initialData?.sectionOrder || DEFAULT_SECTION_ORDER,
+      (initialData?.customSections || []).map(section => section.id)
+    ),
     hiddenSections: initialData?.hiddenSections || [],
     isArchived: false,
     createdAt: now,
@@ -323,7 +503,6 @@ export async function updateResumeInDb(resumeId: string, updates: Partial<Resume
 }
 
 export async function deleteResumeFromDb(resumeId: string): Promise<void> {
-  // Remove local storage references
   try {
     localStorage.removeItem(`forge_resume_${resumeId}`);
     const localListStr = localStorage.getItem(`forge_local_resumes_list`);
@@ -339,7 +518,32 @@ export async function deleteResumeFromDb(resumeId: string): Promise<void> {
     const rRef = doc(getDb(), 'resumes', resumeId);
     await deleteDoc(rRef);
   } catch (err) {
-    console.warn('Firestore delete failed:', err);
+    handleFirestoreError(err, OperationType.DELETE, `resumes/${resumeId}`);
+  }
+}
+
+export function syncLocalResumeCache(resumes: ResumeData[]): void {
+  try {
+    const ids = new Set(resumes.map(r => r.id));
+    localStorage.setItem('forge_local_resumes_list', JSON.stringify([...ids]));
+
+    resumes.forEach(r => {
+      localStorage.setItem(`forge_resume_${r.id}`, JSON.stringify(r));
+    });
+
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith('forge_resume_')) {
+        const id = key.replace('forge_resume_', '');
+        if (!ids.has(id)) {
+          keysToRemove.push(key);
+        }
+      }
+    }
+    keysToRemove.forEach(key => localStorage.removeItem(key));
+  } catch (err) {
+    console.warn('Failed syncing local resume cache:', err);
   }
 }
 

@@ -1,11 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertTriangle, Trash2, X, RefreshCw, Layers } from 'lucide-react';
+import { AlertTriangle, Trash2, X, RefreshCw, Layers, Loader2 } from 'lucide-react';
 
 interface ConfirmationDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
   title: string;
   message: string;
   confirmText?: string;
@@ -23,7 +23,7 @@ export default function ConfirmationDialog({
   cancelText = 'Cancel',
   type = 'warning'
 }: ConfirmationDialogProps) {
-  
+  const [confirming, setConfirming] = useState(false);
   const getIcon = () => {
     switch (type) {
       case 'danger':
@@ -95,18 +95,26 @@ export default function ConfirmationDialog({
               <div className="mt-6 flex flex-col sm:flex-row-reverse gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    onConfirm();
-                    onClose();
+                  disabled={confirming}
+                  onClick={async () => {
+                    setConfirming(true);
+                    try {
+                      await onConfirm();
+                      onClose();
+                    } finally {
+                      setConfirming(false);
+                    }
                   }}
-                  className={`w-full sm:w-auto inline-flex justify-center items-center rounded-xl px-4 py-2.5 text-xs font-bold uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${getButtonClass()}`}
+                  className={`w-full sm:w-auto inline-flex justify-center items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold uppercase tracking-wider shadow-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${getButtonClass()}`}
                 >
+                  {confirming ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                   {confirmText}
                 </button>
                 <button
                   type="button"
+                  disabled={confirming}
                   onClick={onClose}
-                  className="w-full sm:w-auto inline-flex justify-center items-center rounded-xl border border-zinc-200 dark:border-zinc-850 bg-white dark:bg-[#0F1115] px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors cursor-pointer"
+                  className="w-full sm:w-auto inline-flex justify-center items-center rounded-xl border border-zinc-200 dark:border-zinc-850 bg-white dark:bg-[#0F1115] px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-900 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {cancelText}
                 </button>

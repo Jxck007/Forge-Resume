@@ -11,9 +11,10 @@ import {
   saveUserProfile,
   saveUserSettings,
   logoutUser,
+  syncLocalResumeCache,
 } from './services/firebase';
 import { aiParseResume } from './services/groq';
-import { ResumeData, UserSettings, ProfileData } from './types';
+import { ResumeData, UserSettings, ProfileData, TemplateId } from './types';
 import { normalizeResume } from './utils';
 import Header from './components/Header';
 import Auth from './components/Auth';
@@ -35,6 +36,141 @@ interface Toast {
   type: 'success' | 'error' | 'info';
 }
 
+const importId = (prefix: string) =>
+  `${prefix}_${Math.random().toString(36).substring(2, 9)}`;
+
+const asRecord = (value: unknown): Record<string, any> =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {};
+
+const asObjectArray = (value: unknown): Record<string, any>[] => {
+  if (Array.isArray(value)) {
+    return value.filter(item => item && typeof item === 'object' && !Array.isArray(item));
+  }
+  if (!value || typeof value !== 'object') return [];
+
+  const record = value as Record<string, any>;
+  const values = Object.values(record);
+  if (values.length > 0 && values.every(item => item && typeof item === 'object' && !Array.isArray(item))) {
+    return values as Record<string, any>[];
+  }
+  return [record];
+};
+
+const asStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.map(item => String(item ?? '').trim()).filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    return value.split(/[,\n]/).map(item => item.trim()).filter(Boolean);
+  }
+  return [];
+};
+
+const normalizeAiImport = (parsedValue: unknown): Partial<ResumeData> => {
+  const parsed = asRecord(parsedValue);
+  const personal = asRecord(parsed.personalDetails);
+  const skills = asRecord(parsed.skills);
+
+  const imported: Partial<ResumeData> = {
+    title: typeof parsed.title === 'string' ? parsed.title.trim() : '',
+    personalDetails: {
+      fullName: String(personal.fullName || '').trim(),
+      professionalTitle: String(personal.professionalTitle || '').trim(),
+      email: String(personal.email || '').trim(),
+      phone: String(personal.phone || '').trim(),
+      location: String(personal.location || '').trim(),
+      linkedin: String(personal.linkedin || '').trim(),
+      github: String(personal.github || '').trim(),
+      website: String(personal.website || '').trim(),
+      profilePhoto: '',
+    },
+    summary: typeof parsed.summary === 'string' ? parsed.summary.trim() : '',
+    education: asObjectArray(parsed.education).map(entry => ({
+      id: importId('edu'),
+      degree: String(entry.degree || ''),
+      institution: String(entry.institution || ''),
+      location: String(entry.location || ''),
+      startDate: String(entry.startDate || ''),
+      endDate: String(entry.endDate || ''),
+      gpa: String(entry.gpa || ''),
+      description: String(entry.description || ''),
+    })),
+    experience: asObjectArray(parsed.experience).map(entry => ({
+      id: importId('exp'),
+      title: String(entry.title || entry.role || ''),
+      company: String(entry.company || ''),
+      location: String(entry.location || ''),
+      startDate: String(entry.startDate || ''),
+      endDate: String(entry.endDate || ''),
+      description: String(entry.description || ''),
+    })),
+    internships: asObjectArray(parsed.internships).map(entry => ({
+      id: importId('intern'),
+      role: String(entry.role || entry.title || ''),
+      company: String(entry.company || ''),
+      location: String(entry.location || ''),
+      startDate: String(entry.startDate || ''),
+      endDate: String(entry.endDate || ''),
+      description: String(entry.description || ''),
+      technologiesUsed: String(entry.technologiesUsed || entry.technologies || ''),
+    })),
+    projects: asObjectArray(parsed.projects).map(entry => ({
+      id: importId('proj'),
+      name: String(entry.name || entry.title || ''),
+      description: String(entry.description || ''),
+      technologies: String(entry.technologies || ''),
+      github: String(entry.github || ''),
+      live: String(entry.live || ''),
+    })),
+    skills: {
+      programmingLanguages: asStringArray(skills.programmingLanguages),
+      frameworks: asStringArray(skills.frameworks),
+      tools: asStringArray(skills.tools),
+      databases: asStringArray(skills.databases),
+      softSkills: asStringArray(skills.softSkills),
+    },
+    certifications: asObjectArray(parsed.certifications).map(entry => ({
+      id: importId('cert'),
+      name: String(entry.name || entry.title || ''),
+      issuer: String(entry.issuer || ''),
+      date: String(entry.date || ''),
+      url: String(entry.url || ''),
+    })),
+    achievements: asStringArray(parsed.achievements),
+    volunteering: asObjectArray(parsed.volunteering).map(entry => ({
+      id: importId('vol'),
+      title: String(entry.title || entry.role || ''),
+      company: String(entry.company || entry.organization || ''),
+      location: String(entry.location || ''),
+      startDate: String(entry.startDate || ''),
+      endDate: String(entry.endDate || ''),
+      description: String(entry.description || ''),
+    })),
+    languages: asStringArray(parsed.languages),
+  };
+
+  const hasContent = Boolean(
+    imported.personalDetails?.fullName ||
+    imported.personalDetails?.email ||
+    imported.summary ||
+    imported.education?.length ||
+    imported.experience?.length ||
+    imported.internships?.length ||
+    imported.projects?.length ||
+    imported.certifications?.length ||
+    imported.achievements?.length ||
+    Object.values(imported.skills || {}).some(items => items.length > 0)
+  );
+
+  if (!hasContent) {
+    throw new Error('AI could not find usable resume content. No resume was created.');
+  }
+
+  return imported;
+};
+
 export default function App() {
   const [firebaseReady, setFirebaseReady] = useState(isFirebaseConfigured());
   const [dbConnected, setDbConnected] = useState(false);
@@ -53,6 +189,7 @@ export default function App() {
   // Saving states
   const [saving, setSaving] = useState(false);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const resumeActionInProgressRef = useRef<Set<string>>(new Set());
 
   const triggerToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     const id = Math.random().toString(36).substring(2, 9);
@@ -145,11 +282,13 @@ export default function App() {
 
     const unsubResumes = subscribeToUserResumes(user.uid, list => {
       let mergedList = [...list];
+      const firestoreIds = new Set(list.map(r => r.id));
+
       try {
         const localListStr = localStorage.getItem(`forge_local_resumes_list`);
-        const localIds = localListStr ? JSON.parse(localListStr) : [];
+        const localIds: string[] = localListStr ? JSON.parse(localListStr) : [];
         localIds.forEach((lid: string) => {
-          if (!mergedList.some(r => r.id === lid)) {
+          if (!firestoreIds.has(lid)) {
             const cached = localStorage.getItem(`forge_resume_${lid}`);
             if (cached) {
               mergedList.push(JSON.parse(cached));
@@ -161,20 +300,14 @@ export default function App() {
       }
 
       const normalizedList = mergedList.map(r => normalizeResume(r));
+      syncLocalResumeCache(normalizedList);
       setResumes(normalizedList);
-      
-      // Cache these locally to make it run offline-first!
-      normalizedList.forEach(r => {
-        try {
-          localStorage.setItem(`forge_resume_${r.id}`, JSON.stringify(r));
-        } catch {}
-      });
     });
 
     return () => {
       unsubResumes();
     };
-  }, [user, activeResumeId]);
+  }, [user]);
 
   // Toast notifier helper uses the one declared at top of file
 
@@ -188,7 +321,7 @@ export default function App() {
   };
 
   // Resume modifications (CRUD)
-  const handleCreateNewResume = async (title: string, templateId: string) => {
+  const handleCreateNewResume = async (title: string, templateId: TemplateId) => {
     if (!user) return;
     if (!dbConnected) { triggerToast('Cannot verify database connection. Please check your configuration.', 'error'); return; }
     try {
@@ -207,7 +340,10 @@ export default function App() {
       } : {};
 
       const newResume = await createNewResume(user.uid, title, templateId, initialData);
-      setResumes(prev => [newResume, ...prev]);
+      setResumes(prev => {
+        if (prev.some(r => r.id === newResume.id)) return prev;
+        return [newResume, ...prev];
+      });
       setActiveResumeId(newResume.id);
       setActiveTab('builder');
       triggerToast(`Resume "${title}" established!`, 'success');
@@ -219,42 +355,67 @@ export default function App() {
   const handleDuplicateResume = async (src: ResumeData) => {
     if (!user) return;
     if (!dbConnected) { triggerToast('Cannot duplicate while offline.', 'error'); return; }
+
+    const actionKey = `duplicate:${src.id}`;
+    if (resumeActionInProgressRef.current.has(actionKey)) return;
+
+    resumeActionInProgressRef.current.add(actionKey);
     try {
       const duplicatedResume = await createNewResume(
-        user.uid, 
-        `${src.title} (Copy)`, 
-        src.templateId, 
-        src 
+        user.uid,
+        `${src.title} (Copy)`,
+        src.templateId,
+        src
       );
-      setResumes(prev => [duplicatedResume, ...prev]);
+      setResumes(prev => {
+        if (prev.some(r => r.id === duplicatedResume.id)) return prev;
+        return [duplicatedResume, ...prev];
+      });
       triggerToast(`Duplicated into "${duplicatedResume.title}"`, 'success');
     } catch {
       triggerToast('Duplication request failed.', 'error');
+      throw new Error('Duplication failed');
+    } finally {
+      resumeActionInProgressRef.current.delete(actionKey);
     }
   };
 
   const handleDeleteResume = async (id: string) => {
     if (!dbConnected) { triggerToast('Cannot delete while offline.', 'error'); return; }
+
+    const previousResumes = resumes;
+    const previousActiveResumeId = activeResumeId;
+    const previousTab = activeTab;
+
+    setResumes(prev => prev.filter(r => r.id !== id));
+    if (activeResumeId === id) {
+      setActiveResumeId(null);
+      setActiveTab('dashboard');
+    }
+
     try {
-      setResumes(prev => prev.filter(r => r.id !== id));
       await deleteResumeFromDb(id);
-      if (activeResumeId === id) {
-        setActiveResumeId(null);
-        setActiveTab('dashboard');
-      }
       triggerToast('Resume deleted successfully', 'success');
     } catch {
+      setResumes(previousResumes);
+      setActiveResumeId(previousActiveResumeId);
+      setActiveTab(previousTab);
       triggerToast('Delete failed.', 'error');
+      throw new Error('Delete failed');
     }
   };
 
   const handleToggleArchive = async (id: string, state: boolean) => {
     if (!dbConnected) { triggerToast('Cannot archive while offline.', 'error'); return; }
+
+    const previousResumes = resumes;
+    setResumes(prev => prev.map(r => r.id === id ? { ...r, isArchived: state } : r));
+
     try {
-      setResumes(prev => prev.map(r => r.id === id ? { ...r, isArchived: state } : r));
       await updateResumeInDb(id, { isArchived: state });
       triggerToast(state ? 'Resume archived.' : 'Resume restored.', 'success');
     } catch {
+      setResumes(previousResumes);
       triggerToast('Failed to change archive state.', 'error');
     }
   };
@@ -285,72 +446,37 @@ export default function App() {
     }, 1000); // 1-second debounce for stellar performance
   };
 
-  // Import / Parsing Logic via Groq AI
-  const handleImportResume = async (rawText: string) => {
-    if (!user) return;
-    if (!dbConnected) { triggerToast('Cannot import while offline.', 'error'); return; }
-    const apiKey = effectiveSettings?.groqApiKey;
+  const handleParseResumeImport = async (rawText: string): Promise<Partial<ResumeData>> => {
+    if (!user) throw new Error('You must be signed in to import a resume.');
+
+    const provider = effectiveSettings.aiProvider || 'Groq';
+    const apiKey =
+      provider === 'Gemini' ? effectiveSettings.geminiApiKey :
+      provider === 'OpenAI' ? effectiveSettings.openaiApiKey :
+      provider === 'OpenRouter' ? effectiveSettings.openRouterApiKey :
+      effectiveSettings.groqApiKey;
+
     if (!apiKey) {
-      triggerToast('Please configure your Groq key first.', 'error');
-      return;
+      throw new Error(`Please configure your ${provider} API key first.`);
     }
 
     const parsedJson = await aiParseResume(effectiveSettings, rawText);
-    const title = parsedJson.title || 'Extracted Developer Resume';
-    
-    // Create new resume with parsed values prefilled
-    const newResume = await createNewResume(user.uid, title, 'modern');
-    const mergeData: ResumeData = {
-      ...newResume,
-      personalDetails: {
-        fullName: parsedJson.personalDetails?.fullName || '',
-        professionalTitle: parsedJson.personalDetails?.professionalTitle || '',
-        email: parsedJson.personalDetails?.email || '',
-        phone: parsedJson.personalDetails?.phone || '',
-        location: parsedJson.personalDetails?.location || '',
-        linkedin: parsedJson.personalDetails?.linkedin || '',
-        github: parsedJson.personalDetails?.github || '',
-        website: parsedJson.personalDetails?.website || '',
-        profilePhoto: '',
-      },
-      summary: parsedJson.summary || '',
-      education: (parsedJson.education || []).map(e => ({
-        id: 'edu_' + Math.random().toString(36).substring(2, 9),
-        degree: e.degree || '',
-        institution: e.institution || '',
-        location: e.location || '',
-        startDate: e.startDate || '',
-        endDate: e.endDate || '',
-        gpa: e.gpa || '',
-        description: e.description || '',
-      })),
-      experience: (parsedJson.experience || []).map(ex => ({
-        id: 'exp_' + Math.random().toString(36).substring(2, 9),
-        title: ex.title || '',
-        company: ex.company || '',
-        location: ex.location || '',
-        startDate: ex.startDate || '',
-        endDate: ex.endDate || '',
-        description: ex.description || '',
-      })),
-      projects: (parsedJson.projects || []).map(p => ({
-        id: 'proj_' + Math.random().toString(36).substring(2, 9),
-        name: p.name || '',
-        description: p.description || '',
-        technologies: p.technologies || '',
-        github: '',
-        live: '',
-      })),
-      skills: {
-        programmingLanguages: parsedJson.skills?.programmingLanguages || [],
-        frameworks: parsedJson.skills?.frameworks || [],
-        tools: parsedJson.skills?.tools || [],
-        databases: parsedJson.skills?.databases || [],
-        softSkills: parsedJson.skills?.softSkills || [],
-      },
-    };
+    return normalizeAiImport(parsedJson);
+  };
 
-    await updateResumeInDb(newResume.id, mergeData);
+  const handleSaveResumeImport = async (importedData: Partial<ResumeData>) => {
+    if (!user) throw new Error('You must be signed in to import a resume.');
+    if (!dbConnected) throw new Error('Cannot save the imported resume while offline.');
+
+    const title = importedData.title || 'Imported Resume';
+    const newResume = await createNewResume(user.uid, title, 'modern', importedData);
+
+    setResumes(prev => {
+      if (prev.some(r => r.id === newResume.id)) {
+        return prev.map(r => (r.id === newResume.id ? newResume : r));
+      }
+      return [newResume, ...prev];
+    });
     setActiveResumeId(newResume.id);
     setActiveTab('builder');
   };
@@ -391,11 +517,11 @@ export default function App() {
 
   if (!authReady) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0F1115]">
+      <div className="flex min-h-screen items-center justify-center bg-[#0B0F14]">
         <div className="text-center">
-          <Loader2 className="mx-auto h-8 w-8 animate-spin text-indigo-500" />
-          <p className="mt-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-            Synchronizing Forge Workspace...
+          <Loader2 className="mx-auto h-8 w-8 animate-spin text-emerald-300" />
+          <p className="mt-4 text-sm font-medium text-zinc-400">
+            Preparing your Forge workspace...
           </p>
         </div>
       </div>
@@ -408,7 +534,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-[#0F1115] text-zinc-100 transition-colors duration-300 font-sans antialiased selection:bg-indigo-500/20 selection:text-indigo-400">
+      <div className="app-shell min-h-screen bg-[#0B0F14] text-zinc-100 font-sans antialiased selection:bg-emerald-300/25 selection:text-emerald-100">
       {/* HEADER BAR */}
       <Header
         user={user}
@@ -419,7 +545,7 @@ export default function App() {
       />
 
       {/* RENDER BODY PANEL */}
-      <main className="min-h-[calc(100vh-4rem)]">
+      <main className="min-h-[calc(100vh-4rem)] pb-20 md:pb-0">
         {user ? (
           showProfileSetup ? (
             <ProfileSetup onComplete={handleProfileComplete} userEmail={user.email || ''} dbConnected={dbConnected} />
@@ -438,7 +564,8 @@ export default function App() {
                     setActiveResumeId(id);
                     setActiveTab('builder');
                   }}
-                  onImportResume={handleImportResume}
+                  onParseImport={handleParseResumeImport}
+                  onSaveImport={handleSaveResumeImport}
                   setActiveTab={setActiveTab}
                   showToasts={triggerToast}
                 />
@@ -450,36 +577,36 @@ export default function App() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="mx-auto max-w-8xl px-4 py-8 sm:px-6 lg:px-8"
+                className="forge-builder-page mx-auto px-4 py-6 sm:px-6 lg:px-8"
               >
                 {/* SPLIT LAYOUT GRID */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
                   
                   {/* Left: Form Builder Column */}
-                  <div className="lg:col-span-5 space-y-4">
-                    <div className="no-print flex items-center justify-between pb-4 border-b border-zinc-800">
+                  <div className="xl:col-span-5 space-y-4 min-w-0">
+                    <div className="no-print forge-builder-heading">
                         <div className="flex flex-col">
                           <div className="flex items-center gap-2">
-                             <h2 className="text-2xl font-black text-white truncate max-w-[280px]">
+                             <h2 className="text-2xl font-bold text-white truncate max-w-[280px]">
                               {activeResume.title}
                             </h2>
                             {saving && (
-                              <span className="flex items-center gap-1.5 text-[10px] font-bold text-indigo-400 animate-pulse bg-indigo-900/30 px-2 py-1 rounded-full border border-indigo-500/20">
+                              <span className="forge-saving-badge">
                                 <Loader2 className="h-3 w-3 animate-spin" />
                                 <span>SAVING</span>
                               </span>
                             )}
                           </div>
-                          <p className="text-sm text-zinc-400 mt-1">Define your skills and career history</p>
+                          <p className="text-sm text-zinc-400 mt-1">Edit sections and review the document as you work.</p>
                         </div>
                       <button
                         onClick={() => {
                           setActiveResumeId(null);
                           setActiveTab('dashboard');
                         }}
-                        className="text-sm font-bold text-zinc-400 hover:text-white bg-zinc-800/50 hover:bg-zinc-800 px-3 py-1.5 rounded flex items-center gap-2 transition"
+                        className="forge-secondary-button"
                       >
-                        Back to Dashboard
+                        All resumes
                       </button>
                     </div>
 
@@ -493,14 +620,21 @@ export default function App() {
                   </div>
 
                   {/* Right: Live Frame Preview Column */}
-                  <div className="lg:col-span-7">
+                  <div className="xl:col-span-7 min-w-0 xl:sticky xl:top-24">
                     <ResumePreview
                       resume={activeResume}
-                      selectedTemplate={activeResume.templateId as any}
+                      selectedTemplate={activeResume.templateId}
+                      profilePhoto={userProfile?.personalDetails.profilePhoto}
                       onTemplateChange={async nextId => {
                         handleResumeChange({
                           ...activeResume,
                           templateId: nextId,
+                        });
+                      }}
+                      onProfilePhotoUsageChange={useProfilePhoto => {
+                        handleResumeChange({
+                          ...activeResume,
+                          useProfilePhoto,
                         });
                       }}
                       showToasts={triggerToast}

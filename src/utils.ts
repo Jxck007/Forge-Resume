@@ -1,11 +1,13 @@
-import { ResumeData } from './types';
+import { isTemplateId, ResumeData } from './types';
+import { normalizeSectionOrder } from './utils/sectionOrder';
 
 export function normalizeResume(data: any): ResumeData {
   return {
     id: data.id || '',
     userId: data.userId || '',
     title: data.title || 'Untitled Resume',
-    templateId: data.templateId || 'modern',
+    templateId: isTemplateId(data.templateId) ? data.templateId : 'modern',
+    useProfilePhoto: data.useProfilePhoto !== false,
     personalDetails: {
       fullName: data.personalDetails?.fullName || '',
       professionalTitle: data.personalDetails?.professionalTitle || '',
@@ -91,20 +93,12 @@ export function normalizeResume(data: any): ResumeData {
         description: it.description || '',
       })) : [],
     })) : [],
-    sectionOrder: (() => {
-      let order = Array.isArray(data.sectionOrder)
-        ? [...data.sectionOrder]
-        : ['summary', 'experience', 'internships', 'education', 'skills', 'projects', 'certifications', 'achievements', 'volunteering', 'languages'];
-      if (!order.includes('internships')) {
-        const expIdx = order.indexOf('experience');
-        if (expIdx !== -1) {
-          order.splice(expIdx + 1, 0, 'internships');
-        } else {
-          order.push('internships');
-        }
-      }
-      return order;
-    })(),
+    sectionOrder: normalizeSectionOrder(
+      data.sectionOrder,
+      Array.isArray(data.customSections)
+        ? data.customSections.map((section: any) => section?.id).filter(Boolean)
+        : []
+    ),
     hiddenSections: Array.isArray(data.hiddenSections) ? data.hiddenSections : [],
     isArchived: !!data.isArchived,
     createdAt: data.createdAt || new Date().toISOString(),

@@ -265,14 +265,17 @@ export function parseResumeTextLocally(text: string, userId: string = 'local_use
       profilePhoto: ''
     },
     summary: summary || 'Proven professional executing strategic solutions in the primary industry segment with excellent track records.',
+    careerObjective: '',
     education,
     experience,
+    internships: [],
     projects: [],
     skills,
     certifications,
     achievements,
     volunteering: [],
     languages: languages.length > 0 ? languages : ['English (Fluent)'],
+    customSections: [],
     updatedAt: new Date().toISOString()
   };
 }
