@@ -36,7 +36,10 @@ service cloud.firestore {
     function isValidUser(data) {
       return data.uid is string && data.uid == request.auth.uid
         && data.email is string && data.email.size() <= 256
-        && (!('groqApiKey' in data) || (data.groqApiKey is string && data.groqApiKey.size() <= 512));
+        && (!('groqApiKey' in data) || (data.groqApiKey is string && data.groqApiKey.size() <= 512))
+        && (!('geminiApiKey' in data) || (data.geminiApiKey is string && data.geminiApiKey.size() <= 512))
+        && (!('openaiApiKey' in data) || (data.openaiApiKey is string && data.openaiApiKey.size() <= 512))
+        && (!('openRouterApiKey' in data) || (data.openRouterApiKey is string && data.openRouterApiKey.size() <= 512));
     }
 
     // 2. Resume validation

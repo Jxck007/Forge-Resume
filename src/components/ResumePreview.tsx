@@ -13,6 +13,78 @@ interface ResumePreviewProps {
   showToasts: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
+interface PdfProtectedRange {
+  top: number;
+  bottom: number;
+}
+
+const getElementCanvasRange = (
+  target: HTMLElement,
+  rootRect: DOMRect,
+  canvasScaleY: number
+): PdfProtectedRange => {
+  const rect = target.getBoundingClientRect();
+  return {
+    top: (rect.top - rootRect.top) * canvasScaleY,
+    bottom: (rect.bottom - rootRect.top) * canvasScaleY,
+  };
+};
+
+const collectPdfProtectedRanges = (
+  element: HTMLElement,
+  rootRect: DOMRect,
+  canvasScaleY: number,
+  sourcePageHeight: number
+): PdfProtectedRange[] => {
+  const maximumProtectedHeight = sourcePageHeight * 0.92;
+  const ranges = Array.from(
+    element.querySelectorAll<HTMLElement>('.resume-section-item, .avoid-break, article')
+  )
+    .map(target => getElementCanvasRange(target, rootRect, canvasScaleY))
+    .filter(range => range.bottom > range.top && range.bottom - range.top <= maximumProtectedHeight);
+
+  Array.from(
+    element.querySelectorAll<HTMLElement>('.resume-section-heading, h2, h3')
+  ).forEach(heading => {
+    const section = heading.closest<HTMLElement>('.resume-section, section');
+    const explicitFirstItem = section?.querySelector<HTMLElement>('.resume-section-item, article, .avoid-break');
+    const nextSibling = heading.nextElementSibling as HTMLElement | null;
+    const nestedFirstItem = nextSibling?.querySelector<HTMLElement>('.resume-section-item, article, .avoid-break');
+    const firstContent = explicitFirstItem || nestedFirstItem || nextSibling;
+    if (!firstContent) return;
+
+    const headingRange = getElementCanvasRange(heading, rootRect, canvasScaleY);
+    const contentRange = getElementCanvasRange(firstContent, rootRect, canvasScaleY);
+    const range = {
+      top: headingRange.top,
+      bottom: Math.max(headingRange.bottom, contentRange.bottom),
+    };
+    if (range.bottom - range.top <= maximumProtectedHeight) ranges.push(range);
+  });
+
+  return ranges;
+};
+
+const findSafePdfSliceEnd = (
+  sourceY: number,
+  targetEnd: number,
+  protectedRanges: PdfProtectedRange[]
+) => {
+  let sliceEnd = targetEnd;
+
+  for (let pass = 0; pass < protectedRanges.length; pass += 1) {
+    const crossingRanges = protectedRanges.filter(range =>
+      range.top > sourceY + 0.5 &&
+      range.top < sliceEnd &&
+      range.bottom > sliceEnd
+    );
+    if (crossingRanges.length === 0) break;
+    sliceEnd = Math.min(...crossingRanges.map(range => range.top));
+  }
+
+  return sliceEnd > sourceY + 1 ? sliceEnd : targetEnd;
+};
+
 export default function ResumePreview({
   resume,
   selectedTemplate,
@@ -79,19 +151,6 @@ export default function ResumePreview({
       showToasts(msg, 'error');
       return;
     }
-    
-    // DIAGNOSTIC LOGGING
-    console.group('PDF Export Diagnostics');
-    console.log('Timestamp:', new Date().toISOString());
-    console.log('Template ID:', selectedTemplate);
-    console.log('Resume Data:', resume);
-    console.log(
-      'Profile Image State:',
-      !profilePhotoSource ? 'Missing' : shouldUseProfilePhoto ? 'Enabled' : 'Disabled'
-    );
-    console.log('Custom Sections State:', (resume.customSections || []).length > 0 ? `${resume.customSections.length} items` : 'Empty');
-    console.log('Internship Section State:', (resume.internships || []).length > 0 ? `${resume.internships.length} items` : 'Empty');
-    console.groupEnd();
     
     showToasts('Generating PDF...', 'info');
     setIsExporting(true);
@@ -160,41 +219,28 @@ export default function ResumePreview({
           );
         });
       } else {
-        const sourcePageHeight = Math.floor(canvas.width * (pageHeight / pageWidth));
-        const protectedBlocks = Array.from(element.querySelectorAll<HTMLElement>('.avoid-break'))
-          .map(block => {
-            const rect = block.getBoundingClientRect();
-            return {
-              top: (rect.top - rootRect.top) * canvasScaleY,
-              bottom: (rect.bottom - rootRect.top) * canvasScaleY,
-            };
-          })
-          .filter(block => block.bottom > block.top);
-        const headingGroups = Array.from(element.querySelectorAll<HTMLElement>('h3, h4'))
-          .map(heading => {
-            const next = heading.nextElementSibling as HTMLElement | null;
-            const headingRect = heading.getBoundingClientRect();
-            const nextRect = next?.getBoundingClientRect();
-            return {
-              top: (headingRect.top - rootRect.top) * canvasScaleY,
-              bottom: ((nextRect?.bottom ?? headingRect.bottom) - rootRect.top) * canvasScaleY,
-            };
-          })
-          .filter(group => group.bottom > group.top);
-        protectedBlocks.push(...headingGroups);
+        const horizontalMargin = 24;
+        const verticalMargin = 28;
+        const availableWidth = pageWidth - horizontalMargin * 2;
+        const availableHeight = pageHeight - verticalMargin * 2;
+        const pageScale = availableWidth / canvas.width;
+        const sourcePageHeight = Math.floor(availableHeight / pageScale);
+        const protectedRanges = collectPdfProtectedRanges(
+          element,
+          rootRect,
+          canvasScaleY,
+          sourcePageHeight
+        );
         let sourceY = 0;
         let pageIndex = 0;
 
         while (sourceY < canvas.height) {
           const targetEnd = Math.min(sourceY + sourcePageHeight, canvas.height);
-          const crossingBlock = protectedBlocks
-            .filter(block =>
-              block.top > sourceY + sourcePageHeight * 0.2 &&
-              block.top < targetEnd &&
-              block.bottom > targetEnd
-            )
-            .sort((a, b) => a.top - b.top)[0];
-          const sliceEnd = crossingBlock ? crossingBlock.top : targetEnd;
+          const sliceEnd = findSafePdfSliceEnd(
+            sourceY,
+            targetEnd,
+            protectedRanges
+          );
           const sliceHeight = Math.max(1, Math.floor(sliceEnd - sourceY));
           const pageCanvas = document.createElement('canvas');
           pageCanvas.width = canvas.width;
@@ -220,15 +266,21 @@ export default function ResumePreview({
           );
 
           if (pageIndex > 0) pdf.addPage();
-          const renderedHeight = pageWidth * (sliceHeight / canvas.width);
-          pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.98), 'JPEG', 0, 0, pageWidth, renderedHeight);
-          const pageScale = pageWidth / canvas.width;
+          const renderedHeight = sliceHeight * pageScale;
+          pdf.addImage(
+            pageCanvas.toDataURL('image/jpeg', 0.98),
+            'JPEG',
+            horizontalMargin,
+            verticalMargin,
+            availableWidth,
+            renderedHeight
+          );
           links
             .filter(link => link.y < sourceY + sliceHeight && link.y + link.height > sourceY)
             .forEach(link => {
               pdf.link(
-                link.x * pageScale,
-                Math.max(0, link.y - sourceY) * pageScale,
+                horizontalMargin + link.x * pageScale,
+                verticalMargin + Math.max(0, link.y - sourceY) * pageScale,
                 link.width * pageScale,
                 link.height * pageScale,
                 { url: link.url }
@@ -491,23 +543,23 @@ export default function ResumePreview({
     const theme = getTemplateTheme(templateId);
 
     return (
-      <div key={section.id} className="space-y-3 pb-2 text-left avoid-break">
-        <h3 className={`text-xs font-bold uppercase tracking-wider ${theme.headingColor} border-b border-gray-100 pb-1`}>
+      <section key={section.id} className="resume-section resume-section-custom space-y-3 pb-2 text-left">
+        <h3 className={`resume-section-heading text-xs font-bold uppercase tracking-wider ${theme.headingColor} border-b border-gray-100 pb-1`}>
           {section.title}
         </h3>
         <div className="space-y-3">
           {section.items.map(item => (
-            <div key={item.id} className="avoid-break text-left">
+            <article key={item.id} className="resume-section-item avoid-break text-left">
               <div className="flex justify-between items-baseline flex-wrap">
                 <h4 className="text-xs font-bold text-gray-900">{item.title}</h4>
                 {item.date && <span className="text-[10px] text-gray-500 font-medium">{item.date}</span>}
               </div>
               {item.subtitle && <p className="text-[10px] text-gray-500 italic mt-0.5">{item.subtitle}</p>}
               <p className="text-[10.5px] text-gray-600 mt-1.5 whitespace-pre-line leading-relaxed">{item.description}</p>
-            </div>
+            </article>
           ))}
         </div>
-      </div>
+      </section>
     );
   };
 
@@ -788,10 +840,10 @@ export default function ResumePreview({
 
       if (sectionId === 'experience' && experience.length > 0) {
         return (
-          <section key={sectionId} className="space-y-3 text-left">
-            <h3 className={headingClass}>Professional Experience</h3>
+          <section key={sectionId} className="resume-section resume-section-experience space-y-3 text-left">
+            <h3 className={`resume-section-heading ${headingClass}`}>Professional Experience</h3>
             {experience.map(entry => (
-              <article key={entry.id} className="avoid-break">
+              <article key={entry.id} className="resume-section-item avoid-break">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <h4 className="text-xs font-bold text-gray-900">{entry.title} | {entry.company}</h4>
                   <span className="text-[9.5px] font-semibold text-gray-500">{entry.startDate} - {entry.endDate}</span>
@@ -806,10 +858,10 @@ export default function ResumePreview({
 
       if (sectionId === 'education' && education.length > 0) {
         return (
-          <section key={sectionId} className="space-y-3 text-left">
-            <h3 className={headingClass}>Education</h3>
+          <section key={sectionId} className="resume-section resume-section-education space-y-3 text-left">
+            <h3 className={`resume-section-heading ${headingClass}`}>Education</h3>
             {education.map(entry => (
-              <article key={entry.id} className="avoid-break">
+              <article key={entry.id} className="resume-section-item avoid-break">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <h4 className="text-xs font-bold text-gray-900">{entry.degree}</h4>
                   <span className="text-[9.5px] font-semibold text-gray-500">{entry.startDate} - {entry.endDate}</span>
@@ -845,10 +897,10 @@ export default function ResumePreview({
 
       if (sectionId === 'projects' && projects.length > 0) {
         return (
-          <section key={sectionId} className="space-y-3 text-left">
-            <h3 className={headingClass}>Projects</h3>
+          <section key={sectionId} className="resume-section resume-section-projects space-y-3 text-left">
+            <h3 className={`resume-section-heading ${headingClass}`}>Projects</h3>
             {projects.map(project => (
-              <article key={project.id} className="avoid-break">
+              <article key={project.id} className="resume-section-item avoid-break">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <h4 className="text-xs font-bold text-gray-900">{project.name}</h4>
                   <div className="flex gap-2 text-[9.5px] font-semibold">
@@ -866,10 +918,10 @@ export default function ResumePreview({
 
       if (sectionId === 'certifications' && certifications.length > 0) {
         return (
-          <section key={sectionId} className="avoid-break space-y-2 text-left">
-            <h3 className={headingClass}>Certifications</h3>
+          <section key={sectionId} className="resume-section resume-section-certifications space-y-2 text-left">
+            <h3 className={`resume-section-heading ${headingClass}`}>Certifications</h3>
             {certifications.map(certification => (
-              <div key={certification.id} className="text-[10.5px] text-gray-700">
+              <div key={certification.id} className="resume-section-item avoid-break text-[10.5px] text-gray-700">
                 <strong>{certification.name}</strong>
                 {certification.issuer && ` | ${certification.issuer}`}
                 {certification.date && ` | ${certification.date}`}
@@ -2592,9 +2644,298 @@ export default function ResumePreview({
     );
   };
 
+  const renderCreativePortfolioSection = (sectionId: string, sidebar = false) => {
+    if (!isSectionVisible(sectionId)) return null;
+
+    const sidebarHeading = 'mb-2 border-b border-slate-700 pb-1.5 text-[9.5px] font-extrabold uppercase tracking-[0.18em] text-emerald-300';
+    const mainHeading = 'mb-3 flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.16em] text-slate-900 before:h-3 before:w-1 before:rounded-full before:bg-emerald-500';
+
+    if (sectionId === 'skills' && hasSkills) {
+      const skillGroups = [
+        ['Languages', skills.programmingLanguages],
+        ['Frameworks', skills.frameworks],
+        ['Tools', skills.tools],
+        ['Databases', skills.databases],
+        ['Strengths', skills.softSkills],
+      ] as const;
+      return (
+        <section key={sectionId} className="avoid-break">
+          <h3 className={sidebarHeading}>Technical Toolkit</h3>
+          <div className="space-y-3">
+            {skillGroups.map(([label, values]) => values.length > 0 && (
+              <div key={label}>
+                <h4 className="text-[8.5px] font-bold uppercase tracking-wider text-slate-400">{label}</h4>
+                {renderSkillBadges(values, 'creative')}
+              </div>
+            ))}
+          </div>
+        </section>
+      );
+    }
+
+    if (sectionId === 'languages' && languages.length > 0) {
+      return (
+        <section key={sectionId} className="avoid-break">
+          <h3 className={sidebarHeading}>Languages</h3>
+          <div className="space-y-1.5">
+            {languages.map(language => (
+              <p key={language} className="border-l-2 border-emerald-500 pl-2 text-[10px] font-semibold text-slate-200">
+                {language}
+              </p>
+            ))}
+          </div>
+        </section>
+      );
+    }
+
+    if (sectionId === 'certifications' && certifications.length > 0) {
+      return (
+        <section key={sectionId} className="avoid-break">
+          <h3 className={sidebarHeading}>Certifications</h3>
+          <div className="space-y-3">
+            {certifications.map(certification => (
+              <article key={certification.id}>
+                <h4 className="text-[10px] font-bold leading-snug text-white">{certification.name}</h4>
+                <p className="mt-0.5 text-[9px] text-slate-400">
+                  {[certification.issuer, certification.date].filter(Boolean).join(' · ')}
+                </p>
+                <ResumeLink
+                  url={certification.url}
+                  label="View credential"
+                  className="mt-1 inline-block text-[9px] font-bold text-emerald-300"
+                />
+              </article>
+            ))}
+          </div>
+        </section>
+      );
+    }
+
+    if (sidebar) return null;
+
+    const customSection = customSections.find(section => section.id === sectionId);
+    if (customSection) {
+      return (
+        <section key={sectionId} className="space-y-3 text-left">
+          <h3 className={mainHeading}>{customSection.title}</h3>
+          {customSection.items.map(item => (
+            <article key={item.id} className="avoid-break border-l-2 border-slate-200 pl-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h4 className="text-[11px] font-bold text-slate-900">{item.title}</h4>
+                {item.date && <span className="text-[9px] font-bold text-emerald-700">{item.date}</span>}
+              </div>
+              {item.subtitle && <p className="text-[9.5px] font-semibold text-slate-500">{item.subtitle}</p>}
+              <p className="mt-1 whitespace-pre-line text-[10.5px] leading-relaxed text-slate-700">{item.description}</p>
+            </article>
+          ))}
+        </section>
+      );
+    }
+
+    if (sectionId === 'summary' && summary) {
+      return (
+        <section key={sectionId} className="avoid-break rounded-xl border border-emerald-100 bg-emerald-50/50 p-4 text-left">
+          <h3 className={mainHeading}>Profile</h3>
+          <p className="whitespace-pre-wrap text-[11px] font-medium leading-relaxed text-slate-700">{summary}</p>
+        </section>
+      );
+    }
+
+    if (sectionId === 'experience' && experience.length > 0) {
+      return (
+        <section key={sectionId} className="space-y-4 text-left">
+          <h3 className={mainHeading}>Experience</h3>
+          {experience.map(entry => (
+            <article key={entry.id} className="avoid-break border-l-2 border-slate-200 pl-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h4 className="text-[12px] font-extrabold text-slate-950">{entry.title}</h4>
+                  <p className="text-[10.5px] font-bold text-emerald-700">{entry.company}</p>
+                </div>
+                <div className="text-right text-[9px] font-bold uppercase tracking-wide text-slate-500">
+                  <p>{entry.startDate} - {entry.endDate}</p>
+                  {entry.location && <p className="mt-0.5 font-medium normal-case text-slate-400">{entry.location}</p>}
+                </div>
+              </div>
+              <p className="mt-2 whitespace-pre-line text-[10.5px] leading-relaxed text-slate-700">{entry.description}</p>
+            </article>
+          ))}
+        </section>
+      );
+    }
+
+    if (sectionId === 'internships' && (resume.internships || []).length > 0) {
+      return (
+        <section key={sectionId} className="space-y-4 text-left">
+          <h3 className={mainHeading}>Internships</h3>
+          {(resume.internships || []).map(entry => (
+            <article key={entry.id} className="avoid-break border-l-2 border-emerald-200 pl-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h4 className="text-[11.5px] font-extrabold text-slate-950">{entry.role}</h4>
+                  <p className="text-[10px] font-bold text-emerald-700">{entry.company}</p>
+                </div>
+                <span className="text-[9px] font-bold uppercase tracking-wide text-slate-500">{entry.startDate} - {entry.endDate}</span>
+              </div>
+              {entry.technologiesUsed && (
+                <p className="mt-1 text-[9px] font-bold text-slate-500">Stack: {entry.technologiesUsed}</p>
+              )}
+              <p className="mt-1 whitespace-pre-line text-[10.5px] leading-relaxed text-slate-700">{entry.description}</p>
+            </article>
+          ))}
+        </section>
+      );
+    }
+
+    if (sectionId === 'projects' && projects.length > 0) {
+      return (
+        <section key={sectionId} className="space-y-3 text-left">
+          <div className="flex items-end justify-between gap-3 border-b-2 border-slate-900 pb-2">
+            <h3 className="text-[12px] font-black uppercase tracking-[0.16em] text-slate-950">Selected Projects</h3>
+            <span className="text-[8.5px] font-bold uppercase tracking-wider text-emerald-700">Portfolio focus</span>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {projects.map(project => (
+              <article key={project.id} className="avoid-break rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <h4 className="text-[12px] font-extrabold leading-tight text-slate-950">{project.name}</h4>
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+                </div>
+                {project.technologies && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {project.technologies.split(',').map(technology => technology.trim()).filter(Boolean).map(technology => (
+                      <span key={technology} className="rounded border border-emerald-100 bg-emerald-50 px-1.5 py-0.5 text-[8.5px] font-bold text-emerald-800">
+                        {technology}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <p className="mt-2 whitespace-pre-line text-[10px] leading-relaxed text-slate-700">{project.description}</p>
+                {(project.github || project.live) && (
+                  <div className="mt-3 flex flex-wrap gap-3 border-t border-slate-100 pt-2 text-[9px] font-bold">
+                    <ResumeLink url={project.github} label="GitHub" className="text-slate-700" />
+                    <ResumeLink url={project.live} label="Live Demo" className="text-emerald-700" />
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+        </section>
+      );
+    }
+
+    if (sectionId === 'education' && education.length > 0) {
+      return (
+        <section key={sectionId} className="space-y-3 text-left">
+          <h3 className={mainHeading}>Education</h3>
+          {education.map(entry => (
+            <article key={entry.id} className="avoid-break flex flex-wrap items-start justify-between gap-3 border-t border-slate-100 pt-3 first:border-0 first:pt-0">
+              <div>
+                <h4 className="text-[11px] font-extrabold text-slate-950">{entry.degree}</h4>
+                <p className="text-[10px] font-semibold text-slate-600">{entry.institution}</p>
+                {entry.description && <p className="mt-1 text-[10px] text-slate-600">{entry.description}</p>}
+              </div>
+              <div className="text-right text-[9px] font-bold text-slate-500">
+                <p>{entry.startDate} - {entry.endDate}</p>
+                {entry.gpa && <p className="mt-0.5 text-emerald-700">GPA {entry.gpa}</p>}
+              </div>
+            </article>
+          ))}
+        </section>
+      );
+    }
+
+    if (sectionId === 'achievements' && achievements.length > 0) {
+      return (
+        <section key={sectionId} className="avoid-break text-left">
+          <h3 className={mainHeading}>Achievements</h3>
+          <ul className="space-y-1.5 pl-4 text-[10.5px] leading-relaxed text-slate-700">
+            {achievements.map(achievement => <li key={achievement} className="list-disc marker:text-emerald-500">{achievement}</li>)}
+          </ul>
+        </section>
+      );
+    }
+
+    if (sectionId === 'volunteering' && volunteering.length > 0) {
+      return (
+        <section key={sectionId} className="space-y-3 text-left">
+          <h3 className={mainHeading}>Community Work</h3>
+          {volunteering.map(entry => (
+            <article key={entry.id} className="avoid-break border-l-2 border-slate-200 pl-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h4 className="text-[11px] font-bold text-slate-950">{entry.title} · {entry.company}</h4>
+                <span className="text-[9px] font-bold text-slate-500">{entry.startDate} - {entry.endDate}</span>
+              </div>
+              <p className="mt-1 whitespace-pre-line text-[10px] leading-relaxed text-slate-700">{entry.description}</p>
+            </article>
+          ))}
+        </section>
+      );
+    }
+
+    return null;
+  };
+
+  const renderCreativePortfolioContent = () => {
+    const sidebarIds = sectionOrder.filter(sectionId =>
+      ['skills', 'languages', 'certifications'].includes(sectionId)
+    );
+    const mainIds = sectionOrder.filter(sectionId =>
+      !['skills', 'languages', 'certifications'].includes(sectionId)
+    );
+    const hasSidebarContent =
+      (sidebarIds.includes('skills') && hasSkills && isSectionVisible('skills')) ||
+      (sidebarIds.includes('languages') && languages.length > 0 && isSectionVisible('languages')) ||
+      (sidebarIds.includes('certifications') && certifications.length > 0 && isSectionVisible('certifications'));
+
+    return (
+      <div className="space-y-5 font-sans text-slate-800">
+        <header className="avoid-break overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 text-white">
+          <div className="h-1.5 bg-emerald-400" />
+          <div className={`p-6 ${shouldUseProfilePhoto ? 'flex items-center gap-6' : ''}`}>
+            {shouldUseProfilePhoto && (
+              <div className="shrink-0">
+                {renderProfilePhoto('h-24 w-24 rounded-2xl border-2 border-emerald-300 shadow-lg')}
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="mb-2 text-[9px] font-bold uppercase tracking-[0.24em] text-emerald-300">Portfolio Resume</p>
+              <h1 className="text-3xl font-black uppercase leading-none tracking-tight text-white sm:text-4xl">
+                {personalDetails.fullName || 'JANE SMITH'}
+              </h1>
+              <p className="mt-2 text-[12px] font-bold uppercase tracking-[0.14em] text-emerald-300">
+                {personalDetails.professionalTitle || 'Creative Software Engineer'}
+              </p>
+              <div className="mt-4 flex flex-wrap gap-x-3 gap-y-1.5 text-[9.5px] font-medium text-slate-300">
+                {personalDetails.email && <span>{personalDetails.email}</span>}
+                {personalDetails.phone && <span>{personalDetails.phone}</span>}
+                {personalDetails.location && <span>{personalDetails.location}</span>}
+              </div>
+              <div className="mt-2">
+                {renderContactLinks('text-[9.5px] font-bold text-emerald-300')}
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div className={`grid grid-cols-1 gap-5 ${hasSidebarContent ? 'md:grid-cols-[0.82fr_2.18fr]' : ''}`}>
+          {hasSidebarContent && (
+            <aside className="space-y-6 rounded-2xl bg-slate-900 p-5 text-slate-200">
+              {sidebarIds.map(sectionId => renderCreativePortfolioSection(sectionId, true))}
+            </aside>
+          )}
+          <main className="min-w-0 space-y-6">
+            {mainIds.map(sectionId => renderCreativePortfolioSection(sectionId))}
+          </main>
+        </div>
+      </div>
+    );
+  };
+
   const renderOrderedTemplateContent = (id: TemplateId) => {
+    if (id === 'creative') return renderCreativePortfolioContent();
+
     const theme = getTemplateTheme(id);
-    const usesDarkHeader = id === 'creative';
     const centeredHeader = id === 'minimal' || id === 'executive' || id === 'classic';
     const photoClassByTemplate: Record<TemplateId, string> = {
       modern: 'h-16 w-16 rounded-xl border-2 border-indigo-100',
@@ -2629,23 +2970,19 @@ export default function ResumePreview({
           >
             <div className="min-w-0 flex-1">
               <h1
-                className={`text-3xl font-extrabold uppercase leading-none tracking-tight ${
-                  usesDarkHeader ? 'text-white' : theme.titleColor
-                }`}
+                className={`text-3xl font-extrabold uppercase leading-none tracking-tight ${theme.titleColor}`}
               >
                 {personalDetails.fullName || 'JANE SMITH'}
               </h1>
               <p
-                className={`mt-1.5 text-xs font-bold uppercase tracking-wider ${
-                  usesDarkHeader ? 'text-yellow-200' : theme.headingColor
-                }`}
+                className={`mt-1.5 text-xs font-bold uppercase tracking-wider ${theme.headingColor}`}
               >
                 {personalDetails.professionalTitle || 'Software Architect'}
               </p>
               <div
                 className={`mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[10px] ${
                   centeredHeader ? 'justify-center' : ''
-                } ${usesDarkHeader ? 'text-indigo-100' : 'text-gray-600'}`}
+                } text-gray-600`}
               >
                 {personalDetails.email && <span>{personalDetails.email}</span>}
                 {personalDetails.phone && <span>{personalDetails.phone}</span>}
@@ -2665,7 +3002,7 @@ export default function ResumePreview({
   };
 
   return (
-    <div className="flex flex-col h-full bg-gray-50/50  rounded-2xl border border-gray-150  p-4" id="resume-preview-panel">
+    <div className="forge-preview-workspace flex flex-col h-full bg-gray-50/50 rounded-2xl border border-gray-150 p-4" id="resume-preview-panel">
       {/* Template Selector Horizontal Bar */}
       <div className="no-print mb-4 flex flex-col gap-3 pb-4 border-b border-gray-150 ">
         
@@ -2675,7 +3012,7 @@ export default function ResumePreview({
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2 font-bold text-sm">
                 <AlertTriangle className="h-4 w-4" />
-                <span>PDF Export Diagnostic Report</span>
+                <span>PDF export failed</span>
               </div>
               <button 
                 onClick={() => setExportError(null)}
@@ -2685,12 +3022,8 @@ export default function ResumePreview({
               </button>
             </div>
             <div className="space-y-2 text-xs">
-              <p><strong>Error Message:</strong> {exportError.message}</p>
-              <div className="bg-rose-100/50 p-2 rounded border border-rose-200 overflow-auto max-h-32">
-                <p className="font-mono whitespace-pre-wrap"><strong>Stack Trace:</strong> {exportError.stack || 'Unspecified'}</p>
-              </div>
-              <p><strong>Component:</strong> ResumePreview</p>
-              <p className="text-[10px] text-rose-600 italic">Check the browser console for additional PDF export details.</p>
+              <p>{exportError.message}</p>
+              <p className="text-[10px] text-rose-600">Try again after checking that profile images and external links are available.</p>
             </div>
           </div>
         )}
@@ -2698,7 +3031,7 @@ export default function ResumePreview({
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <span className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
             <Eye className="h-4 w-4 text-indigo-500" />
-            <span>Style Templates ({templatesList.length})</span>
+            <span>Resume template ({templatesList.length})</span>
           </span>
           <div className="flex flex-col gap-2 sm:items-end">
             <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-white p-1">
@@ -2771,7 +3104,7 @@ export default function ResumePreview({
                 id="btn-trigger-print"
               >
                 <Printer className="h-3.5 w-3.5 text-gray-500 " />
-                <span>System Print</span>
+                <span>Print</span>
               </button>
             </div>
           </div>
@@ -2801,7 +3134,7 @@ export default function ResumePreview({
           className={`print-page transition-all transform origin-top w-full min-w-0 sm:min-w-[750px] sm:max-w-[800px] bg-white text-black shadow-lg rounded-sm ${
             exportMode === 'single'
               ? 'resume-export-single min-h-[970px] p-6 sm:p-8'
-              : 'min-h-[1060px] p-8 sm:p-12'
+              : 'resume-export-multi min-h-[1060px] p-8 sm:p-12'
           } ${themeConfig.font}`}
           id="resume-live-print-view"
           style={{ height: 'fit-content' }}

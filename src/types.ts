@@ -137,6 +137,7 @@ export interface UserSettings {
   openRouterApiKey?: string;
   hasCompletedProfile?: boolean;
   modelId?: string;
+  providerModels?: Partial<Record<UserSettings['aiProvider'], string>>;
   temperature?: number;
   defaultTemplate?: string;
   defaultExportFormat?: string;

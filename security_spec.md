@@ -1,4 +1,4 @@
-# Firestore Security Policy Specification (ResumeForge AI)
+# Firestore Security Policy Specification (Forge Resume)
 
 ## 1. Data Invariants
 - A User profile document (/users/{userId}) can only be read, created, updated, or modified by the authenticated user whose `request.auth.uid` matches `{userId}`.

@@ -589,12 +589,12 @@ export default function ResumeBuilder({
   };
 
   return (
-    <div className="space-y-6" id="resume-builder-form-panel">
+    <div className="forge-editor-panel space-y-6" id="resume-builder-form-panel">
       {/* Auto save banner info */}
       <div className="flex items-center justify-between bg-[#0F1115] border border-[#2A2E37] p-3.5 rounded-xl">
         <div>
-          <h4 className="text-xs font-bold text-white">Writing Mode</h4>
-          <span className="text-[10px] text-zinc-400">All alterations persist inside Firestore</span>
+          <h4 className="text-xs font-bold text-white">Autosave</h4>
+          <span className="text-[10px] text-zinc-400">Changes are saved securely as you work</span>
         </div>
         <div className="flex items-center gap-1.5">
           {saving ? (

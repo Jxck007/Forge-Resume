@@ -74,7 +74,6 @@ const normalizeAiImport = (parsedValue: unknown): Partial<ResumeData> => {
   const skills = asRecord(parsed.skills);
 
   const imported: Partial<ResumeData> = {
-    title: typeof parsed.title === 'string' ? parsed.title.trim() : '',
     personalDetails: {
       fullName: String(personal.fullName || '').trim(),
       professionalTitle: String(personal.professionalTitle || '').trim(),
@@ -222,16 +221,13 @@ export default function App() {
     const unsubAuth = onAuthStateChanged(auth, async curUser => {
       setUser(curUser);
       if (curUser) {
-        // Check local storage cache first to show instantly
+        // Restore non-sensitive profile data only. Provider keys are never cached in localStorage.
         try {
           const cachedProfile = localStorage.getItem(`forge_profile_${curUser.uid}`);
           if (cachedProfile) {
             setUserProfile(JSON.parse(cachedProfile));
           }
-          const cachedSettings = localStorage.getItem(`forge_settings_${curUser.uid}`);
-          if (cachedSettings) {
-            setUserSettings(JSON.parse(cachedSettings));
-          }
+          localStorage.removeItem(`forge_settings_${curUser.uid}`);
         } catch (err) {
           console.warn('Failed restoring local cache on boot:', err);
         }
@@ -245,9 +241,6 @@ export default function App() {
 
           if (settings) {
             setUserSettings(settings);
-            try {
-              localStorage.setItem(`forge_settings_${curUser.uid}`, JSON.stringify(settings));
-            } catch {}
           }
           if (profile) {
             setUserProfile(profile);
@@ -506,13 +499,9 @@ export default function App() {
 
   const activeResume = resumes.find(r => r.id === activeResumeId);
 
-  // Merge user firestore integration settings with secret env fallback
+  // AI access is strictly BYOK. Vite client environment variables must never contain provider secrets.
   const effectiveSettings = React.useMemo(() => {
-    const envKey = import.meta.env.VITE_GROQ_API_KEY || '';
-    return {
-      ...(userSettings || {}),
-      groqApiKey: userSettings?.groqApiKey || envKey || '',
-    } as UserSettings;
+    return { ...(userSettings || {}) } as UserSettings;
   }, [userSettings]);
 
   if (!authReady) {
@@ -536,16 +525,18 @@ export default function App() {
     <ErrorBoundary>
       <div className="app-shell min-h-screen bg-[#0B0F14] text-zinc-100 font-sans antialiased selection:bg-emerald-300/25 selection:text-emerald-100">
       {/* HEADER BAR */}
-      <Header
-        user={user}
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        hasActiveResume={!!activeResumeId}
-        onLogout={handleLogout}
-      />
+      {user && (
+        <Header
+          user={user}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          hasActiveResume={!!activeResumeId}
+          onLogout={handleLogout}
+        />
+      )}
 
       {/* RENDER BODY PANEL */}
-      <main className="min-h-[calc(100vh-4rem)] pb-20 md:pb-0">
+      <main className={user ? 'min-h-[calc(100vh-4rem)] pb-24 lg:pb-0' : 'min-h-screen'}>
         {user ? (
           showProfileSetup ? (
             <ProfileSetup onComplete={handleProfileComplete} userEmail={user.email || ''} dbConnected={dbConnected} />
@@ -577,7 +568,7 @@ export default function App() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="forge-builder-page mx-auto px-4 py-6 sm:px-6 lg:px-8"
+                className="forge-builder-page forge-product-page mx-auto px-4 py-6 sm:px-6 lg:px-8"
               >
                 {/* SPLIT LAYOUT GRID */}
                 <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
@@ -674,6 +665,7 @@ export default function App() {
                   user={user}
                   showToasts={triggerToast}
                   onKeyConfigured={handleSettingsKeyConfigured}
+                  onNavigate={setActiveTab}
                 />
               </motion.div>
             )}

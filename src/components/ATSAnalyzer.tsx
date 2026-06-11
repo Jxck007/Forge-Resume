@@ -678,16 +678,17 @@ export default function ATSAnalyzer({
   };
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 print:p-0" id="ats-root-analyzer">
+    <div className="forge-product-page forge-ats-page mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 print:p-0" id="ats-root-analyzer">
       {/* HEADER ROW - Hidden in Print */}
-      <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 print:hidden">
+      <div className="forge-product-heading mb-8 flex flex-col md:flex-row md:items-end md:justify-between gap-4 print:hidden">
         <div>
-          <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100 tracking-tight flex items-center gap-2.5">
+          <span className="forge-eyebrow">Application intelligence</span>
+          <h2 className="text-3xl font-bold text-zinc-900 dark:text-zinc-100 tracking-tight flex items-center gap-2.5">
             <TrendingUp className="h-5 w-5 text-indigo-500" />
-            <span>ATS Core Optimizer Engine</span>
+            <span>ATS match analysis</span>
           </h2>
           <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500 font-medium leading-normal animate-fade">
-            Compare and score resume credentials against automated parsing models and professional AI diagnostics.
+            Compare a resume against a target role and turn gaps into focused improvements.
           </p>
         </div>
       </div>
@@ -702,19 +703,19 @@ export default function ATSAnalyzer({
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-widest flex items-center gap-2">
                 <FileText className="h-4 w-4 text-indigo-500" />
-                <span>1. Target Position parameters</span>
+                <span>1. Target job description</span>
               </h3>
             </div>
             <textarea
               value={jobDescription}
               onChange={e => setJobDescription(e.target.value)}
               rows={8}
-              placeholder="Paste here the complete job details, required qualifications, frameworks, stack specifications, and goals..."
+              placeholder="Paste the job description, required skills, responsibilities, and qualifications..."
               className="w-full px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/50 text-xs focus:bg-white dark:focus:bg-zinc-900 dark:text-white transition outline-none font-sans"
               id="ats-jd-input"
             />
             <div className="mt-1 flex justify-between text-[10px] text-zinc-400 font-medium">
-              <span>Required: Clean description keywords</span>
+              <span>Paste the complete role description</span>
               <span>{jobDescription.trim().length} chars</span>
             </div>
           </div>
@@ -723,7 +724,7 @@ export default function ATSAnalyzer({
           <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-xs">
             <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-widest flex items-center gap-2 mb-4">
               <Upload className="h-5 w-5 text-indigo-500" />
-              <span>2. Input Resume Material</span>
+              <span>2. Resume source</span>
             </h3>
 
             {/* Selector tabs */}
@@ -737,7 +738,7 @@ export default function ATSAnalyzer({
                 }`}
               >
                 <Upload className="w-3.5 h-3.5 text-zinc-500" />
-                <span>Upload File</span>
+                <span>Upload resume</span>
               </button>
               <button
                 disabled={resumes.length === 0}
@@ -749,7 +750,7 @@ export default function ATSAnalyzer({
                 }`}
               >
                 <FolderOpen className="w-3.5 h-3.5 text-zinc-500" />
-                <span>Choose Saved Profile</span>
+                <span>Saved resume</span>
               </button>
             </div>
 
@@ -780,7 +781,7 @@ export default function ATSAnalyzer({
                       <Upload className="w-4 h-4 text-indigo-505 text-indigo-500" />
                     </div>
                     <p className="text-xs font-bold text-zinc-900 dark:text-white mb-0.5">
-                      Drag & Drop Resume Material
+                      Drop your resume here
                     </p>
                     <p className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[210px] mb-3 leading-normal">
                       Files supported: PDF, DOCX, or images (includes OCR reader).
@@ -789,7 +790,7 @@ export default function ATSAnalyzer({
                       onClick={() => fileInputRef.current?.click()}
                       className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-550 text-white text-[10px] font-bold rounded-lg shadow-sm transition cursor-pointer"
                     >
-                      Browse Documents
+                      Choose file
                     </button>
                   </>
                 ) : (
@@ -825,7 +826,7 @@ export default function ATSAnalyzer({
               <div className="space-y-4">
                 <div>
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5">
-                    Choose Selected Resume profile
+                    Select a saved resume
                   </label>
                   <select
                     value={selectedResumeId}
@@ -850,7 +851,7 @@ export default function ATSAnalyzer({
                 className="w-full flex items-center justify-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-550 text-white px-4 py-2.5 text-xs font-bold shadow-xs active:scale-[0.99] transition disabled:opacity-40 cursor-pointer select-none"
               >
                 <Sparkles className="h-4 w-4 text-yellow-300 fill-current" />
-                <span>Compile ATS Diagnostic Match</span>
+                <span>Run ATS scan</span>
               </button>
             </div>
           </div>
@@ -860,7 +861,7 @@ export default function ATSAnalyzer({
             <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-xs">
               <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
                 <BookMarked className="w-3.5 h-3.5 text-indigo-500" />
-                <span>Historic Records</span>
+                <span>Recent scans</span>
               </h3>
               <div className="space-y-3 max-h-[220px] overflow-y-auto pr-1">
                 {historicReports.map(h => (
@@ -898,7 +899,7 @@ export default function ATSAnalyzer({
                       setJobDescription(h.jobDescription);
                       setProgressStep('completed');
                       setIsSaved(true);
-                      showToasts(`Fetched historical ATS diagnostic (${h.score}%)`, 'info');
+                      showToasts(`Opened saved ATS report (${h.score}%).`, 'info');
                     }}
                     className="p-3 rounded-xl border border-gray-100 dark:border-gray-901 hover:border-indigo-400 bg-gray-50/40 dark:bg-gray-900/10 flex items-center justify-between cursor-pointer transition text-xs"
                   >
@@ -923,10 +924,10 @@ export default function ATSAnalyzer({
           {progressStep !== 'idle' && progressStep !== 'completed' && (
             <div className="rounded-3xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950 p-8 shadow-xl text-center flex flex-col items-center justify-center min-h-[460px] print:hidden">
               <Loader2 className="w-12 h-12 text-indigo-500 animate-spin mb-6" />
-              <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Automated Match Synthesis</h3>
+              <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Analyzing your resume</h3>
               
               <p className="text-xs font-mono text-indigo-500 tracking-wider mb-6 px-4 py-1.5 bg-indigo-50 dark:bg-indigo-950/40 rounded-full font-bold">
-                {progressStatusMsg || 'Analyzing resume vectors...'}
+                {progressStatusMsg || 'Reviewing resume content...'}
               </p>
 
               {/* Progress Flow Blocks */}
@@ -968,9 +969,9 @@ export default function ATSAnalyzer({
           {progressStep === 'idle' && (
             <div className="rounded-3xl border-2 border-dashed border-gray-200 dark:border-gray-800 min-h-[460px] flex flex-col items-center justify-center p-8 text-center print:hidden">
               <TrendingUp className="w-12 h-12 text-gray-300 dark:text-gray-700 mb-4" />
-              <h3 className="font-bold text-base text-gray-900 dark:text-white">Run your first ATS Scanner scan</h3>
+              <h3 className="font-bold text-base text-gray-900 dark:text-white">Check your resume against a role</h3>
               <p className="text-xs text-gray-400 max-w-xs mt-1 mb-6">
-                Paste your target job specs on the left column, upload your resume PDF, Word, or Image, and compile diagnostic checks.
+                Paste a target job description, choose a resume, and review the match score and missing keywords.
               </p>
               <div className="flex gap-2 flex-wrap justify-center">
                 <select
@@ -1004,7 +1005,7 @@ export default function ATSAnalyzer({
                     className="px-4 py-2 hover:bg-gray-150 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 text-xs font-bold rounded-lg transition border border-gray-200 dark:border-gray-800 flex items-center gap-1.5 cursor-pointer"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Run Another File</span>
+                    <span>New scan</span>
                   </button>
                 </div>
 

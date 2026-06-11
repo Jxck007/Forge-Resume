@@ -8,10 +8,8 @@ interface BrandLogoProps {
 export default function BrandLogo({ compact = false, className = '' }: BrandLogoProps) {
   return (
     <div className={`forge-brand ${className}`} aria-label="Forge Resume">
-      <span className="forge-mark" aria-hidden="true">
-        <span className="forge-mark-bar forge-mark-bar-top" />
-        <span className="forge-mark-bar forge-mark-bar-middle" />
-        <span className="forge-mark-stem" />
+      <span className="forge-brand-emblem" aria-hidden="true">
+        <img src="/forge-resume-logo.png" alt="" />
       </span>
       {!compact && (
         <span className="forge-wordmark">

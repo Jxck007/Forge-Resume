@@ -119,7 +119,7 @@ async function executeAICall(
       endpoint = 'https://openrouter.ai/api/v1/chat/completions';
       headers['Authorization'] = `Bearer ${apiKey}`;
       headers['HTTP-Referer'] = window.location.origin;
-      headers['X-Title'] = 'Forge AI Resume Builder';
+      headers['X-Title'] = 'Forge Resume';
       body = {
         model,
         messages: [
@@ -171,7 +171,7 @@ async function executeAICall(
   return data.choices[0]?.message?.content || '';
 }
 
-function getDefaultModel(provider: string): string {
+export function getDefaultModel(provider: string): string {
   switch (provider) {
     case 'Groq': return 'llama-3.3-70b-versatile';
     case 'OpenAI': return 'gpt-4o-mini';
@@ -179,6 +179,15 @@ function getDefaultModel(provider: string): string {
     case 'OpenRouter': return 'anthropic/claude-3-haiku';
     default: return '';
   }
+}
+
+export async function testAIConnection(settings: UserSettings): Promise<void> {
+  await executeAICall(
+    settings,
+    'Reply with the single word OK.',
+    'Connection test',
+    false
+  );
 }
 
 export function cleanJsonOutput(text: string): string {

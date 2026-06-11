@@ -337,7 +337,7 @@ export default function ProfileSetup({ onComplete, userEmail, dbConnected }: Pro
   );
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6 sm:p-12 relative overflow-hidden">
+    <div className="forge-onboarding min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6 sm:p-12 relative overflow-hidden">
       {cropModalSrc && (
         <ImageCropperModal
           imageSrc={cropModalSrc}
@@ -353,10 +353,10 @@ export default function ProfileSetup({ onComplete, userEmail, dbConnected }: Pro
         <div className="text-center mb-10 space-y-2">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 text-[10px] font-black uppercase tracking-widest border border-indigo-100 dark:border-indigo-900 mb-2">
             <Sparkles className="h-3 w-3" />
-            <span>Smart Onboarding</span>
+            <span>Profile setup</span>
           </div>
-          <h1 className="text-4xl font-black tracking-tight text-gray-900 dark:text-white">Complete Your Profile</h1>
-          <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto">Set up your professional identity once, build unlimited resumes in seconds.</p>
+          <h1 className="text-4xl font-black tracking-tight text-gray-900 dark:text-white">Complete your profile</h1>
+          <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto">Keep reusable career details ready for every resume you create.</p>
         </div>
 
         {/* Multi-step progress indicator */}
@@ -432,7 +432,7 @@ export default function ProfileSetup({ onComplete, userEmail, dbConnected }: Pro
         </div>
         
         <p className="text-center mt-8 text-xs text-gray-400 font-medium">
-          Secure and private. Powered by <span className="text-indigo-500 font-bold">ResumeForge AI</span>
+          Secure and private. Powered by <span className="text-indigo-500 font-bold">Forge Resume</span>
         </p>
       </div>
     </div>

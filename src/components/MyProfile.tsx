@@ -302,15 +302,6 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Avatar presets
-  const avatarPresets = [
-    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-    'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
-    'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150&auto=format&fit=crop&q=80',
-  ];
-
   // Fetch initial profile and settings
   useEffect(() => {
     if (profile) {
@@ -407,7 +398,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
     const missing = checks.filter(c => !c.pass).map(c => c.label);
 
     let level = 'Beginner'; let levelColor = 'text-gray-400 border-gray-700 bg-gray-900/20';
-    if (percent >= 90) { level = 'ATS All-Star'; levelColor = 'text-emerald-400 border-emerald-900/50 bg-emerald-950/20'; }
+    if (percent >= 90) { level = 'Profile ready'; levelColor = 'text-emerald-400 border-emerald-900/50 bg-emerald-950/20'; }
     else if (percent >= 60) { level = 'Intermediate'; levelColor = 'text-indigo-400 border-indigo-900/50 bg-indigo-950/20'; }
     else if (percent >= 30) { level = 'Getting Started'; levelColor = 'text-amber-400 border-amber-900/50 bg-amber-950/20'; }
 
@@ -663,7 +654,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
   ];
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <div className="forge-product-page forge-profile-page mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       {/* Crop Modal */}
       {cropModalSrc && (
         <ImageCropperModal imageSrc={cropModalSrc} onClose={() => setCropModalSrc(null)} onCropComplete={handleCropComplete} />
@@ -690,7 +681,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
       />
 
       {/* ── COVER HEADER ── */}
-      <div className="relative mb-8 overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900/40 shadow-xl">
+      <div className="forge-profile-hero relative mb-8 overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900/40 shadow-xl">
         <div className="h-36 bg-gradient-to-r from-[#0c0e14] via-indigo-950/60 to-[#0c0e14] relative">
           <div className="absolute inset-0 opacity-[0.07] bg-[radial-gradient(#6366f1_1px,transparent_1px)] [background-size:20px_20px]" />
           <div className="absolute inset-0 bg-gradient-to-b from-transparent to-zinc-900/40" />
@@ -704,12 +695,18 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
         <div className="px-6 pb-6 pt-0 sm:px-8 flex flex-col md:flex-row md:items-end gap-6 relative">
           {/* Avatar */}
           <div className="relative -mt-14 h-28 w-28 rounded-2xl bg-zinc-900 p-1.5 shadow-xl border border-zinc-800 shrink-0">
-            <img
-              src={localProfile.personalDetails?.profilePhoto || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80'}
-              alt="Profile"
-              className="h-full w-full object-cover rounded-xl"
-              referrerPolicy="no-referrer"
-            />
+            {localProfile.personalDetails?.profilePhoto ? (
+              <img
+                src={localProfile.personalDetails.profilePhoto}
+                alt="Profile"
+                className="h-full w-full object-cover rounded-xl"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center rounded-xl bg-[#0b1315] text-3xl font-bold text-emerald-300">
+                {(localProfile.personalDetails?.fullName || user.email || 'F').charAt(0).toUpperCase()}
+              </div>
+            )}
             <label className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-xl opacity-0 hover:opacity-100 transition cursor-pointer">
               <Edit3 className="h-5 w-5 text-white" />
               <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={handlePhotoUpload} />
@@ -747,9 +744,9 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+      <div className="forge-profile-grid grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* ── LEFT COLUMN ── */}
-        <div className="lg:col-span-4 space-y-6">
+        <div className="forge-profile-sidebar lg:col-span-4 space-y-6">
 
           {/* Completion Meter */}
           <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5 shadow-sm">
@@ -795,7 +792,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
             {missingFields.length === 0 && (
               <div className="flex items-center gap-2 text-[11px] font-bold text-emerald-400 bg-emerald-950/15 border border-emerald-900/30 px-3 py-2 rounded-lg">
                 <CheckCircle2 className="h-3.5 w-3.5" />
-                <span>100% complete — ATS All-Star!</span>
+                <span>Profile complete and ready to reuse</span>
               </div>
             )}
           </div>
@@ -819,23 +816,13 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
                 <button onClick={() => updatePersonalField('profilePhoto', '')} className="text-[10px] font-bold text-rose-400 hover:underline cursor-pointer">Remove</button>
               </div>
             )}
-            <div className="space-y-2 pt-2 border-t border-zinc-800/50">
-              <span className="text-[10px] font-bold text-zinc-500 uppercase">Quick Presets</span>
-              <div className="flex gap-2 flex-wrap">
-                {avatarPresets.map((p, i) => (
-                  <button key={i} onClick={() => updatePersonalField('profilePhoto', p)} className={`h-8 w-8 rounded-lg overflow-hidden border-2 transition hover:scale-110 cursor-pointer ${localProfile.personalDetails?.profilePhoto === p ? 'border-indigo-500 ring-2 ring-indigo-500/20' : 'border-transparent'}`}>
-                    <img src={p} alt="preset" className="h-full w-full object-cover" />
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
 
           {/* AI Import Card */}
           <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5 shadow-sm space-y-4">
             <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
               <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
-              AI Profile Import
+              Resume Import
             </h4>
 
             {!isAiConfigured && (
@@ -845,7 +832,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
               </div>
             )}
 
-            <p className="text-[11px] text-zinc-500 leading-relaxed">Import from your existing resume. The AI extracts all sections — always review before saving.</p>
+            <p className="text-[11px] text-zinc-500 leading-relaxed">Import an existing resume and review the structured profile details before saving.</p>
 
             {/* Import method selector */}
             <div className="grid grid-cols-2 gap-2">
@@ -900,7 +887,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
                       disabled={importParsing || !importText.trim()}
                       className="flex-1 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1"
                     >
-                      {importParsing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Sparkles className="h-3.5 w-3.5" />Parse</>}
+                      {importParsing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Sparkles className="h-3.5 w-3.5" />Review import</>}
                     </button>
                   </div>
                 </motion.div>
@@ -917,9 +904,9 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
         </div>
 
         {/* ── RIGHT COLUMN: TABS ── */}
-        <div className="lg:col-span-8 space-y-4">
+        <div className="forge-profile-editor lg:col-span-8 space-y-4">
           {/* Tab bar */}
-          <div className="flex border-b border-zinc-800 overflow-x-auto no-scrollbar gap-0.5">
+          <div className="forge-profile-tabs flex border-b border-zinc-800 overflow-x-auto no-scrollbar gap-0.5">
             {tabs.map(tab => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -942,7 +929,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
           </div>
 
           {/* Tab content */}
-          <div className="bg-zinc-900/25 p-6 border border-zinc-800/80 rounded-2xl min-h-[480px]">
+          <div className="forge-profile-content bg-zinc-900/25 p-6 border border-zinc-800/80 rounded-2xl min-h-[480px]">
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeTab}

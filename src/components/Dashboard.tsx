@@ -61,6 +61,7 @@ export default function Dashboard({
   const [pastedText, setPastedText] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
   const [reviewData, setReviewData] = useState<Partial<ResumeData> | null>(null);
+  const [importTitle, setImportTitle] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [loadingAction, setLoadingAction] = useState(false);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
@@ -136,6 +137,7 @@ export default function Dashboard({
     setPastedText('');
     setImportFile(null);
     setReviewData(null);
+    setImportTitle('');
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -143,6 +145,7 @@ export default function Dashboard({
     setImportMode(mode);
     setImportFile(null);
     setReviewData(null);
+    setImportTitle('');
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -176,6 +179,11 @@ export default function Dashboard({
 
       showToasts('Structuring resume data with AI...', 'info');
       setReviewData(await onParseImport(rawText));
+      setImportTitle(
+        importMode !== 'text' && importFile
+          ? importFile.name.replace(/\.[^/.]+$/, '').trim()
+          : 'Imported Resume'
+      );
     } catch (error: unknown) {
       showToasts(error instanceof Error ? error.message : 'Resume import failed.', 'error');
     } finally {
@@ -185,9 +193,13 @@ export default function Dashboard({
 
   const handleImportSave = async () => {
     if (!reviewData) return;
+    if (!importTitle.trim()) {
+      showToasts('Please name your imported resume.', 'info');
+      return;
+    }
     setLoadingAction(true);
     try {
-      await onSaveImport(reviewData);
+      await onSaveImport({ ...reviewData, title: importTitle.trim() });
       resetImport();
       showToasts('Imported resume saved.', 'success');
     } catch (error: unknown) {
@@ -215,6 +227,11 @@ export default function Dashboard({
       detail: `${reviewData.experience?.length || 0} entries`,
     },
     {
+      label: 'Internships',
+      ready: Boolean(reviewData.internships?.length),
+      detail: `${reviewData.internships?.length || 0} entries`,
+    },
+    {
       label: 'Education',
       ready: Boolean(reviewData.education?.length),
       detail: `${reviewData.education?.length || 0} entries`,
@@ -237,12 +254,17 @@ export default function Dashboard({
       ready: Boolean(reviewData.certifications?.length || reviewData.achievements?.length),
       detail: `${(reviewData.certifications?.length || 0) + (reviewData.achievements?.length || 0)} entries`,
     },
+    {
+      label: 'Languages',
+      ready: Boolean(reviewData.languages?.length),
+      detail: reviewData.languages?.join(', ') || 'Not detected',
+    },
   ] : [];
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 font-sans">
+    <div className="forge-product-page forge-dashboard-page mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 font-sans">
       {/* Top: Welcome & Actions */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10">
+      <div className="forge-product-heading flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
         <div>
           <span className="forge-eyebrow">Career workspace</span>
           <h2 className="text-3xl font-bold tracking-tight text-white mt-2 mb-2">
@@ -271,8 +293,8 @@ export default function Dashboard({
       </div>
 
       {/* Middle: Resume Statistics */}
-      <div className="mb-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="rounded-2xl border border-[#2A2E37] bg-[#171A21] p-6 shadow-sm flex flex-col justify-between">
+      <div className="forge-metric-grid mb-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="forge-metric-card rounded-2xl border border-[#2A2E37] bg-[#171A21] p-6 shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between mb-4">
             <span className="text-xs font-semibold uppercase tracking-widest text-zinc-500">Total Resumes</span>
             <div className="p-2 rounded-lg bg-zinc-800/50 text-zinc-400">
@@ -285,7 +307,7 @@ export default function Dashboard({
           </div>
         </div>
 
-        <div className="rounded-2xl border border-[#2A2E37] bg-[#171A21] p-6 shadow-sm flex flex-col justify-between">
+        <div className="forge-metric-card rounded-2xl border border-[#2A2E37] bg-[#171A21] p-6 shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between mb-4">
             <span className="text-xs font-semibold uppercase tracking-widest text-zinc-500">Active</span>
             <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
@@ -298,7 +320,7 @@ export default function Dashboard({
           </div>
         </div>
 
-        <div className="rounded-2xl border border-[#2A2E37] bg-[#171A21] p-6 shadow-sm flex flex-col justify-between">
+        <div className="forge-metric-card rounded-2xl border border-[#2A2E37] bg-[#171A21] p-6 shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between mb-4">
             <span className="text-xs font-semibold uppercase tracking-widest text-zinc-500">ATS Reports</span>
             <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400">
@@ -313,7 +335,7 @@ export default function Dashboard({
           </div>
         </div>
 
-        <div className="rounded-2xl border border-[#2A2E37] bg-[#171A21] p-6 shadow-sm flex flex-col justify-between">
+        <div className="forge-metric-card rounded-2xl border border-[#2A2E37] bg-[#171A21] p-6 shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between mb-4">
             <span className="text-xs font-semibold uppercase tracking-widest text-zinc-500">Profile Completion</span>
             <div className={`p-2 rounded-lg ${settings?.hasCompletedProfile ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
@@ -359,7 +381,7 @@ export default function Dashboard({
             </div>
             <h4 className="text-base font-bold text-white mb-2">No resumes found</h4>
             <p className="text-sm text-zinc-400 max-w-md mx-auto mb-8 leading-relaxed">
-              You haven't built any resumes yet. Start fresh by creating a new document, or import an existing resume using AI.
+              You haven't built any resumes yet. Start with a professional template or import an existing file or text.
             </p>
             <div className="flex gap-4">
                <button
@@ -377,7 +399,7 @@ export default function Dashboard({
               <motion.div
                 key={r.id}
                 layoutId={r.id}
-                className="group relative rounded-2xl border border-[#2A2E37] bg-[#171A21] p-6 shadow-sm hover:border-zinc-600 transition-all cursor-pointer flex flex-col justify-between min-h-[200px] overflow-hidden"
+                className="forge-resume-card group relative rounded-2xl border border-[#2A2E37] bg-[#171A21] p-6 shadow-sm hover:border-zinc-600 transition-all cursor-pointer flex flex-col justify-between min-h-[200px] overflow-hidden"
                 onClick={() => onSelectResume(r.id)}
               >
                 <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
@@ -689,25 +711,40 @@ export default function Dashboard({
                     )}
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    {reviewSections.map(section => (
-                      <div
-                        key={section.label}
-                        className={`flex items-start gap-3 rounded-xl border p-3.5 ${
-                          section.ready
-                            ? 'border-emerald-900/50 bg-emerald-950/15'
-                            : 'border-zinc-800 bg-zinc-900/30'
-                        }`}
-                      >
-                        {section.ready
-                          ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-                          : <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-zinc-600" />}
-                        <div className="min-w-0">
-                          <p className="text-xs font-bold uppercase tracking-wider text-zinc-200">{section.label}</p>
-                          <p className="mt-0.5 truncate text-xs text-zinc-500">{section.detail}</p>
+                  <div className="space-y-5">
+                    <label className="block">
+                      <span className="mb-1.5 block text-xs font-semibold text-zinc-300">Resume name</span>
+                      <input
+                        type="text"
+                        value={importTitle}
+                        onChange={event => setImportTitle(event.target.value)}
+                        maxLength={100}
+                        placeholder="e.g., Frontend Engineer — Acme"
+                        className="w-full rounded-xl border border-[#2A2E37] bg-[#0F1115] px-4 py-2.5 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10"
+                        autoFocus
+                      />
+                      <span className="mt-1.5 block text-xs text-zinc-500">Use any name that helps identify this version. AI does not choose it for you.</span>
+                    </label>
+                    <div className="space-y-2">
+                      {reviewSections.map(section => (
+                        <div
+                          key={section.label}
+                          className={`flex items-start gap-3 rounded-xl border p-3.5 ${
+                            section.ready
+                              ? 'border-emerald-900/50 bg-emerald-950/15'
+                              : 'border-zinc-800 bg-zinc-900/30'
+                          }`}
+                        >
+                          {section.ready
+                            ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                            : <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-zinc-600" />}
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold uppercase tracking-wider text-zinc-200">{section.label}</p>
+                            <p className="mt-0.5 truncate text-xs text-zinc-500">{section.detail}</p>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -727,7 +764,7 @@ export default function Dashboard({
                   <button
                     type="button"
                     onClick={reviewData ? handleImportSave : handleImportParse}
-                    disabled={loadingAction || !isAiConfigured || (!reviewData && importMode === 'text' && !pastedText.trim()) || (!reviewData && importMode !== 'text' && !importFile)}
+                    disabled={loadingAction || !isAiConfigured || (Boolean(reviewData) && !importTitle.trim()) || (!reviewData && importMode === 'text' && !pastedText.trim()) || (!reviewData && importMode !== 'text' && !importFile)}
                     className="flex items-center gap-2 rounded-xl bg-emerald-400 px-5 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {loadingAction ? <Loader2 className="h-4 w-4 animate-spin" /> : reviewData ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}

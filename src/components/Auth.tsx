@@ -26,10 +26,12 @@ export default function Auth({ onSuccess }: AuthProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [errorAction, setErrorAction] = useState<'create' | 'google' | 'login' | 'reset' | null>(null);
 
   const clearMessages = () => {
     setError(null);
     setMessage(null);
+    setErrorAction(null);
   };
 
   const handleGoogleSignIn = async () => {
@@ -48,6 +50,9 @@ export default function Auth({ onSuccess }: AuthProps) {
           setMode('login');
           setPendingGoogleLink(true);
         }
+      }
+      if (error instanceof AuthActionError && error.code === 'auth/use-google') {
+        setErrorAction('google');
       }
       setError(error instanceof Error ? error.message : 'Google sign-in failed. Please try again.');
     } finally {
@@ -77,6 +82,13 @@ export default function Auth({ onSuccess }: AuthProps) {
         setMessage('Password reset instructions were sent to your email.');
       }
     } catch (error: unknown) {
+      if (error instanceof AuthActionError) {
+        if (error.email) setEmail(error.email);
+        if (error.code === 'auth/use-google') setErrorAction('google');
+        else if (error.code === 'auth/account-not-found') setErrorAction('create');
+        else if (error.code === 'auth/email-already-in-use') setErrorAction('login');
+        else if (error.code === 'auth/wrong-password') setErrorAction('reset');
+      }
       setError(error instanceof Error ? error.message : 'We could not complete that request.');
     } finally {
       setLoading(false);
@@ -151,7 +163,7 @@ export default function Auth({ onSuccess }: AuthProps) {
           <div className="forge-auth-heading">
             <span>{mode === 'register' ? 'Start building' : mode === 'forgot' ? 'Account recovery' : 'Welcome back'}</span>
             <h2>
-              {mode === 'register' ? 'Create your Forge account' : mode === 'forgot' ? 'Reset your password' : 'Continue your job search'}
+              {mode === 'register' ? 'Create your Forge account' : mode === 'forgot' ? 'Reset your password' : 'Continue your Forge Journey'}
             </h2>
             <p>
               {mode === 'register'
@@ -163,7 +175,30 @@ export default function Auth({ onSuccess }: AuthProps) {
           </div>
 
           <AnimatePresence mode="popLayout">
-            {error && <motion.div className="forge-alert is-error" role="alert" aria-live="assertive">{error}</motion.div>}
+            {error && (
+              <motion.div className="forge-alert is-error" role="alert" aria-live="assertive">
+                <span>{error}</span>
+                {errorAction && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (errorAction === 'google') handleGoogleSignIn();
+                      else if (errorAction === 'create') switchMode('register');
+                      else if (errorAction === 'login') switchMode('login');
+                      else switchMode('forgot');
+                    }}
+                  >
+                    {errorAction === 'google'
+                      ? 'Continue with Google'
+                      : errorAction === 'create'
+                      ? 'Create account'
+                      : errorAction === 'login'
+                      ? 'Go to sign in'
+                      : 'Reset password'}
+                  </button>
+                )}
+              </motion.div>
+            )}
             {message && <motion.div className="forge-alert is-success" role="status" aria-live="polite">{message}</motion.div>}
           </AnimatePresence>
 
@@ -176,7 +211,7 @@ export default function Auth({ onSuccess }: AuthProps) {
                   type="email"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
-                  placeholder="you@company.com"
+                  placeholder="you@gmail.com"
                   autoComplete="email"
                   autoCapitalize="none"
                   spellCheck={false}
@@ -253,8 +288,11 @@ export default function Auth({ onSuccess }: AuthProps) {
 
           <div className="forge-auth-divider"><span>or</span></div>
           <button type="button" className="forge-google-button" onClick={handleGoogleSignIn} disabled={loading}>
-            <span>G</span> Continue with Google
+            <span>G</span> {mode === 'register' ? 'Create account with Google' : 'Sign in with Google'}
           </button>
+          <p className="forge-google-help">
+            Existing Google users are signed in automatically. If this email uses a password, Forge Resume will guide you through secure account linking.
+          </p>
 
           <div className="forge-auth-switch">
             {mode === 'login' && <>New to Forge? <button onClick={() => switchMode('register')}>Create an account</button></>}

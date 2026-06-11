@@ -49,6 +49,7 @@ export default function Header({
     { id: 'builder' as const, label: 'Resumes', icon: FileText, disabled: !hasActiveResume },
     { id: 'ats' as const, label: 'ATS Analyzer', mobileLabel: 'ATS', icon: BarChart3 },
     { id: 'profile' as const, label: 'Profile', icon: UserIcon },
+    { id: 'settings' as const, label: 'Settings', icon: Settings },
   ];
 
   return (

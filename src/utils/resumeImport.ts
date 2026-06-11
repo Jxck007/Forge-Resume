@@ -9,14 +9,39 @@ export async function extractResumeText(file: File, mode: Exclude<ResumeImportMo
     ).href;
     const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
     const pages: string[] = [];
+    let ocrWorker: Awaited<ReturnType<typeof import('tesseract.js')['createWorker']>> | null = null;
 
-    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-      const page = await pdf.getPage(pageNumber);
-      const content = await page.getTextContent();
-      pages.push(content.items.map((item: any) => item.str || '').join(' '));
+    try {
+      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+        const page = await pdf.getPage(pageNumber);
+        const content = await page.getTextContent();
+        const pageText = content.items.map((item: any) => item.str || '').join(' ').trim();
+
+        if (pageText) {
+          pages.push(pageText);
+          continue;
+        }
+
+        if (!ocrWorker) {
+          const { createWorker } = await import('tesseract.js');
+          ocrWorker = await createWorker('eng');
+        }
+
+        const viewport = page.getViewport({ scale: 1.75 });
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Unable to prepare scanned PDF page for OCR.');
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        await page.render({ canvas, canvasContext: context, viewport }).promise;
+        const result = await ocrWorker.recognize(canvas);
+        pages.push(result.data.text.trim());
+      }
+    } finally {
+      await ocrWorker?.terminate();
     }
 
-    return pages.join('\n');
+    return pages.filter(Boolean).join('\n');
   }
 
   if (mode === 'docx') {

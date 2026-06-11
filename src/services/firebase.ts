@@ -24,6 +24,7 @@ import {
   getDocs,
   getDocFromServer,
   onSnapshot,
+  deleteField,
 } from 'firebase/firestore';
 import { ResumeData, UserSettings, AtsReport, ProfileData, TemplateId } from '../types';
 import { getAuthInstance, getDb, resetFirebaseConfiguration } from '../config/firebase';
@@ -117,16 +118,27 @@ const providerLabel = (method: string) => {
   }
 };
 
+const getSignInMethods = async (email: string) => {
+  if (!email) return [];
+  try {
+    return await fetchSignInMethodsForEmail(getAuthInstance(), normalizeEmail(email));
+  } catch {
+    return [];
+  }
+};
+
 export function getAuthErrorMessage(error: unknown): string {
   const code = error && typeof error === 'object' && 'code' in error
     ? String((error as { code?: unknown }).code || '')
     : '';
 
   switch (code) {
-    case 'auth/invalid-credential':
     case 'auth/wrong-password':
+      return 'That password is incorrect. Try again or reset your password.';
     case 'auth/user-not-found':
-      return 'The email or password is incorrect. Check your details or reset your password.';
+      return 'No Forge Resume account was found for this email. Create an account to get started.';
+    case 'auth/invalid-credential':
+      return 'No account was found for this email, or the password is incorrect. Check your details or create an account.';
     case 'auth/email-already-in-use':
       return 'An account already exists for this email. Sign in instead, or continue with Google if that is how you registered.';
     case 'auth/invalid-email':
@@ -217,11 +229,7 @@ export async function loginWithGoogle() {
       let signInMethods: string[] = [];
 
       if (email) {
-        try {
-          signInMethods = await fetchSignInMethodsForEmail(finalAuth, email);
-        } catch {
-          signInMethods = [];
-        }
+        signInMethods = await getSignInMethods(email);
       }
 
       pendingGoogleCredential = credential;
@@ -275,14 +283,40 @@ export async function loginWithEmail(email: string, pass: string) {
       resetFirebaseConfiguration();
     }
     console.error('Email Sign-In Error:', error);
-    throw toAuthActionError(error);
+    const code = error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code || '')
+      : '';
+    if (['auth/invalid-credential', 'auth/wrong-password', 'auth/user-not-found'].includes(code)) {
+      const signInMethods = await getSignInMethods(normalizedEmail);
+      if (signInMethods.includes('google.com') && !signInMethods.includes('password')) {
+        throw new AuthActionError(
+          'auth/use-google',
+          'This email is registered with Google. Continue with Google to sign in.',
+          { email: normalizedEmail, signInMethods }
+        );
+      }
+      if (signInMethods.includes('password')) {
+        throw new AuthActionError(
+          'auth/wrong-password',
+          'That password is incorrect. Try again or reset your password.',
+          { email: normalizedEmail, signInMethods }
+        );
+      }
+      throw new AuthActionError(
+        'auth/account-not-found',
+        'No account was found for this email, or the password is incorrect. Check the password or create an account.',
+        { email: normalizedEmail, signInMethods }
+      );
+    }
+    throw toAuthActionError(error, { email: normalizedEmail });
   }
 }
 
 export async function registerWithEmail(email: string, pass: string) {
+  const normalizedEmail = normalizeEmail(email);
   try {
     clearPendingGoogleLink();
-    const result = await createUserWithEmailAndPassword(getAuthInstance(), normalizeEmail(email), pass);
+    const result = await createUserWithEmailAndPassword(getAuthInstance(), normalizedEmail, pass);
     await syncUserProfileAfterAuth(result.user);
     return result.user;
   } catch (error: unknown) {
@@ -290,7 +324,25 @@ export async function registerWithEmail(email: string, pass: string) {
       resetFirebaseConfiguration();
     }
     console.error('Email Registration Error:', error);
-    throw toAuthActionError(error);
+    const code = error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code || '')
+      : '';
+    if (code === 'auth/email-already-in-use') {
+      const signInMethods = await getSignInMethods(normalizedEmail);
+      if (signInMethods.includes('google.com') && !signInMethods.includes('password')) {
+        throw new AuthActionError(
+          'auth/use-google',
+          'An account already exists for this email with Google. Sign in with Google instead.',
+          { email: normalizedEmail, signInMethods }
+        );
+      }
+      throw new AuthActionError(
+        code,
+        'An account already exists for this email. Sign in instead.',
+        { email: normalizedEmail, signInMethods }
+      );
+    }
+    throw toAuthActionError(error, { email: normalizedEmail });
   }
 }
 
@@ -351,6 +403,21 @@ export async function saveUserSettings(uid: string, fields: Partial<UserSettings
   try {
     await updateDoc(userRef, {
       ...fields,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `users/${uid}`);
+  }
+}
+
+export async function removeUserProviderKey(
+  uid: string,
+  keyField: 'groqApiKey' | 'geminiApiKey' | 'openaiApiKey' | 'openRouterApiKey'
+): Promise<void> {
+  const userRef = doc(getDb(), 'users', uid);
+  try {
+    await updateDoc(userRef, {
+      [keyField]: deleteField(),
       updatedAt: new Date().toISOString(),
     });
   } catch (err) {

@@ -1,6 +1,6 @@
 {
-  "name": "ResumeForge AI",
-  "description": "Build ATS-Optimized Resumes That Get Interviews",
+  "name": "Forge Resume",
+  "description": "Build professional, ATS-ready resumes with Forge Resume.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
