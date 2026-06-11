@@ -529,7 +529,7 @@ export default function App() {
   }
 
   if (!firebaseReady) {
-    return <FirebaseSetupWizard onComplete={() => setFirebaseReady(true)} />;
+    return <FirebaseSetupWizard />;
   }
 
   return (

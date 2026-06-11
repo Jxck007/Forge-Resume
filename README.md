@@ -2,19 +2,17 @@
 <img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
 </div>
 
-# Run and deploy your AI Studio app
-
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/7b78e83a-c620-4db2-9d0c-c51dd113b34e
+# Forge Resume
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
+**Prerequisites:** Node.js and a Firebase web app.
 
+1. Install dependencies with `npm install`.
+2. Copy `.env.example` to `.env.local`.
+3. Add the Firebase web app values to `.env.local`.
+4. Enable Email/Password and Google authentication in Firebase Authentication.
+5. Deploy `firestore.rules` to the configured Firebase project.
+6. Start the app with `npm run dev`.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+Never commit `.env`, `.env.local`, or production environment files.

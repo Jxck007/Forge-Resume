@@ -226,8 +226,11 @@ export default function Dashboard({
     },
     {
       label: 'Skills',
-      ready: Object.values(reviewData.skills || {}).some(values => values?.length),
-      detail: Object.values(reviewData.skills || {}).flat().slice(0, 6).join(', ') || 'Not detected',
+      ready: Object.values(reviewData.skills || {}).some(values => Array.isArray(values) && values.length > 0),
+      detail: Object.values(reviewData.skills || {})
+        .flatMap(values => Array.isArray(values) ? values : [])
+        .slice(0, 6)
+        .join(', ') || 'Not detected',
     },
     {
       label: 'Certifications and achievements',

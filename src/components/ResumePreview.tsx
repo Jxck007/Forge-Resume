@@ -310,9 +310,9 @@ export default function ResumePreview({
       case 'creative':
         return {
           font: 'font-sans',
-          headerBg: 'bg-gradient-to-r from-violet-605 to-indigo-600 text-white p-6 rounded-xl',
-          headingColor: 'text-violet-600 font-extrabold uppercase tracking-widest',
-          titleColor: 'text-gray-900',
+          headerBg: 'bg-slate-900 text-white p-6 rounded-xl',
+          headingColor: 'text-emerald-700 font-extrabold uppercase tracking-widest',
+          titleColor: 'text-slate-950',
           bodyBg: 'bg-white text-gray-800',
         };
       case 'atsFriendly':
@@ -384,7 +384,7 @@ export default function ResumePreview({
       minimal: 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-400',
       corporate: 'border-slate-300 bg-slate-100 text-slate-800 hover:border-slate-500',
       executive: 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:border-emerald-400',
-      creative: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 hover:border-fuchsia-400',
+      creative: 'border-emerald-200 bg-slate-900 text-emerald-300 hover:border-emerald-400',
       atsFriendly: 'border-zinc-300 bg-white text-zinc-900 hover:border-zinc-500',
       softwareEngineer: 'border-cyan-200 bg-slate-900 text-cyan-300 hover:border-cyan-400',
       student: 'border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-400',
@@ -411,7 +411,7 @@ export default function ResumePreview({
 
     let badgeStyle = 'bg-gray-50  text-gray-650  text-[10px] font-medium rounded-full px-2.5 py-0.5 border border-gray-100';
     if (type === 'creative') {
-      badgeStyle = 'bg-violet-100/70 text-violet-850 font-bold text-[10px] rounded-md px-2.5 py-0.5 border border-violet-200/50';
+      badgeStyle = 'bg-emerald-50 text-emerald-900 font-bold text-[9.5px] rounded-md px-2 py-0.5 border border-emerald-100';
     } else if (type === 'softwareEngineer') {
       badgeStyle = 'bg-slate-100 text-slate-800 font-mono text-[9px] rounded px-2 py-0.5 border border-slate-200/50';
     } else if (type === 'modern') {
