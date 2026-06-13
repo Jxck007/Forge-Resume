@@ -1,10 +1,12 @@
 import { isTemplateId, ResumeData } from './types';
 import { normalizeSectionOrder } from './utils/sectionOrder';
+import { normalizeEducationScore } from './utils/educationScore';
 
 export function normalizeResume(data: any): ResumeData {
   return {
     id: data.id || '',
-    userId: data.userId || '',
+    ownerId: data.ownerId || data.userId || '',
+    userId: data.userId || data.ownerId || '',
     title: data.title || 'Untitled Resume',
     templateId: isTemplateId(data.templateId) ? data.templateId : 'modern',
     useProfilePhoto: data.useProfilePhoto !== false,
@@ -20,16 +22,19 @@ export function normalizeResume(data: any): ResumeData {
       profilePhoto: data.personalDetails?.profilePhoto || '',
     },
     summary: data.summary || '',
-    education: Array.isArray(data.education) ? data.education.map((e: any) => ({
-      id: e.id || Math.random().toString(36).substring(2, 9),
-      degree: e.degree || '',
-      institution: e.institution || '',
-      location: e.location || '',
-      startDate: e.startDate || '',
-      endDate: e.endDate || '',
-      gpa: e.gpa || '',
-      description: e.description || '',
-    })) : [],
+    education: Array.isArray(data.education) ? data.education.map((e: any) => {
+      const score = normalizeEducationScore(e);
+      return {
+        id: e.id || Math.random().toString(36).substring(2, 9),
+        degree: e.degree || '',
+        institution: e.institution || '',
+        location: e.location || '',
+        startDate: e.startDate || '',
+        endDate: e.endDate || '',
+        ...score,
+        description: e.description || '',
+      };
+    }) : [],
     experience: Array.isArray(data.experience) ? data.experience.map((e: any) => ({
       id: e.id || Math.random().toString(36).substring(2, 9),
       title: e.title || '',
@@ -54,6 +59,8 @@ export function normalizeResume(data: any): ResumeData {
       name: p.name || '',
       description: p.description || '',
       technologies: p.technologies || '',
+      startDate: p.startDate || '',
+      endDate: p.endDate || '',
       github: p.github || '',
       live: p.live || '',
     })) : [],
@@ -99,6 +106,7 @@ export function normalizeResume(data: any): ResumeData {
         ? data.customSections.map((section: any) => section?.id).filter(Boolean)
         : []
     ),
+    sectionOrderMode: data.sectionOrderMode === 'template' ? 'template' : 'custom',
     hiddenSections: Array.isArray(data.hiddenSections) ? data.hiddenSections : [],
     isArchived: !!data.isArchived,
     createdAt: data.createdAt || new Date().toISOString(),

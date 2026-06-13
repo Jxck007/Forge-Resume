@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import ConfirmationDialog from './ConfirmationDialog';
 import { extractResumeText, getImportAccept, ResumeImportMode, validateImportFile } from '../utils/resumeImport';
+import { ReviewedImport } from '../utils/aiImportQuality';
 
 interface DashboardProps {
   resumes: ResumeData[];
@@ -34,7 +35,7 @@ interface DashboardProps {
   onDelete: (id: string) => Promise<void>;
   onToggleArchive: (id: string, state: boolean) => Promise<void>;
   onSelectResume: (id: string) => void;
-  onParseImport: (rawText: string) => Promise<Partial<ResumeData>>;
+  onParseImport: (rawText: string) => Promise<ReviewedImport<ResumeData>>;
   onSaveImport: (parsedData: Partial<ResumeData>) => Promise<void>;
   setActiveTab: (tab: 'dashboard' | 'builder' | 'ats' | 'settings') => void;
   showToasts: (msg: string, type: 'success' | 'error' | 'info') => void;
@@ -60,9 +61,12 @@ export default function Dashboard({
   const [importMode, setImportMode] = useState<ResumeImportMode>('pdf');
   const [pastedText, setPastedText] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
-  const [reviewData, setReviewData] = useState<Partial<ResumeData> | null>(null);
+  const [reviewData, setReviewData] = useState<ReviewedImport<ResumeData> | null>(null);
   const [importTitle, setImportTitle] = useState('');
+  const [importProgress, setImportProgress] = useState(0);
+  const [importStatus, setImportStatus] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const importInProgressRef = useRef(false);
   const [loadingAction, setLoadingAction] = useState(false);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
@@ -138,6 +142,8 @@ export default function Dashboard({
     setImportFile(null);
     setReviewData(null);
     setImportTitle('');
+    setImportProgress(0);
+    setImportStatus('');
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -150,12 +156,19 @@ export default function Dashboard({
   };
 
   const handleImportParse = async () => {
+    if (importInProgressRef.current) {
+      showToasts('Import already in progress.', 'info');
+      return;
+    }
     if (!isAiConfigured) {
       showToasts(`Configure your ${settings?.aiProvider || 'Groq'} API key in Settings before importing.`, 'error');
       return;
     }
 
+    importInProgressRef.current = true;
     setLoadingAction(true);
+    setImportProgress(10);
+    setImportStatus('Preparing import...');
     try {
       let rawText = pastedText.trim();
       if (importMode !== 'text') {
@@ -169,6 +182,8 @@ export default function Dashboard({
           return;
         }
         showToasts('Extracting resume text...', 'info');
+        setImportProgress(25);
+        setImportStatus('Extracting resume text...');
         rawText = (await extractResumeText(importFile, importMode)).trim();
       }
 
@@ -178,7 +193,11 @@ export default function Dashboard({
       }
 
       showToasts('Structuring resume data with AI...', 'info');
+      setImportProgress(60);
+      setImportStatus('Verifying extracted information...');
       setReviewData(await onParseImport(rawText));
+      setImportProgress(100);
+      setImportStatus('Ready for review');
       setImportTitle(
         importMode !== 'text' && importFile
           ? importFile.name.replace(/\.[^/.]+$/, '').trim()
@@ -187,6 +206,7 @@ export default function Dashboard({
     } catch (error: unknown) {
       showToasts(error instanceof Error ? error.message : 'Resume import failed.', 'error');
     } finally {
+      importInProgressRef.current = false;
       setLoadingAction(false);
     }
   };
@@ -199,7 +219,7 @@ export default function Dashboard({
     }
     setLoadingAction(true);
     try {
-      await onSaveImport({ ...reviewData, title: importTitle.trim() });
+      await onSaveImport({ ...reviewData.data, title: importTitle.trim() });
       resetImport();
       showToasts('Imported resume saved.', 'success');
     } catch (error: unknown) {
@@ -209,57 +229,69 @@ export default function Dashboard({
     }
   };
 
-  const reviewSections = reviewData ? [
+  const parsedReview = reviewData?.data;
+  const reviewSections = parsedReview ? [
     {
       label: 'Personal details',
-      ready: Boolean(reviewData.personalDetails?.fullName || reviewData.personalDetails?.email),
-      detail: [reviewData.personalDetails?.fullName, reviewData.personalDetails?.professionalTitle]
+      ready: Boolean(parsedReview.personalDetails?.fullName || parsedReview.personalDetails?.email),
+      detail: [parsedReview.personalDetails?.fullName, parsedReview.personalDetails?.professionalTitle]
         .filter(Boolean).join(' · ') || 'Not detected',
     },
     {
       label: 'Professional summary',
-      ready: Boolean(reviewData.summary),
-      detail: reviewData.summary?.slice(0, 120) || 'Not detected',
+      ready: Boolean(parsedReview.summary),
+      detail: parsedReview.summary?.slice(0, 120) || 'Not detected',
     },
     {
       label: 'Experience',
-      ready: Boolean(reviewData.experience?.length),
-      detail: `${reviewData.experience?.length || 0} entries`,
+      ready: Boolean(parsedReview.experience?.length),
+      detail: `${parsedReview.experience?.length || 0} entries`,
     },
     {
       label: 'Internships',
-      ready: Boolean(reviewData.internships?.length),
-      detail: `${reviewData.internships?.length || 0} entries`,
+      ready: Boolean(parsedReview.internships?.length),
+      detail: `${parsedReview.internships?.length || 0} entries`,
     },
     {
       label: 'Education',
-      ready: Boolean(reviewData.education?.length),
-      detail: `${reviewData.education?.length || 0} entries`,
+      ready: Boolean(parsedReview.education?.length),
+      detail: `${parsedReview.education?.length || 0} entries`,
     },
     {
       label: 'Projects',
-      ready: Boolean(reviewData.projects?.length),
-      detail: `${reviewData.projects?.length || 0} entries`,
+      ready: Boolean(parsedReview.projects?.length),
+      detail: `${parsedReview.projects?.length || 0} entries`,
     },
     {
       label: 'Skills',
-      ready: Object.values(reviewData.skills || {}).some(values => Array.isArray(values) && values.length > 0),
-      detail: Object.values(reviewData.skills || {})
+      ready: Object.values(parsedReview.skills || {}).some(values => Array.isArray(values) && values.length > 0),
+      detail: Object.values(parsedReview.skills || {})
         .flatMap(values => Array.isArray(values) ? values : [])
         .slice(0, 6)
         .join(', ') || 'Not detected',
     },
     {
       label: 'Certifications and achievements',
-      ready: Boolean(reviewData.certifications?.length || reviewData.achievements?.length),
-      detail: `${(reviewData.certifications?.length || 0) + (reviewData.achievements?.length || 0)} entries`,
+      ready: Boolean(parsedReview.certifications?.length || parsedReview.achievements?.length),
+      detail: `${(parsedReview.certifications?.length || 0) + (parsedReview.achievements?.length || 0)} entries`,
     },
     {
       label: 'Languages',
-      ready: Boolean(reviewData.languages?.length),
-      detail: reviewData.languages?.join(', ') || 'Not detected',
+      ready: Boolean(parsedReview.languages?.length),
+      detail: parsedReview.languages?.join(', ') || 'Not detected',
     },
   ] : [];
+  const reviewConfidenceKey: Record<string, string> = {
+    'Personal details': 'personalDetails',
+    'Professional summary': 'summary',
+    Experience: 'experience',
+    Internships: 'internships',
+    Education: 'education',
+    Projects: 'projects',
+    Skills: 'skills',
+    'Certifications and achievements': 'certifications',
+    Languages: 'languages',
+  };
 
   return (
     <div className="forge-product-page forge-dashboard-page mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 font-sans">
@@ -629,6 +661,7 @@ export default function Dashboard({
                 <button
                   type="button"
                   onClick={resetImport}
+                  disabled={loadingAction}
                   className="rounded-lg p-2 text-zinc-500 transition hover:bg-zinc-800 hover:text-white"
                   aria-label="Close import"
                 >
@@ -637,6 +670,21 @@ export default function Dashboard({
               </div>
 
               <div className="flex-1 overflow-y-auto p-6">
+                {loadingAction && (
+                  <div className="mb-5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                    <div className="flex items-center justify-between text-xs font-semibold text-emerald-200">
+                      <span>{importStatus}</span>
+                      <span>{importProgress}%</span>
+                    </div>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+                      <motion.div
+                        className="h-full rounded-full bg-emerald-400"
+                        animate={{ width: `${importProgress}%` }}
+                        transition={{ duration: 0.25 }}
+                      />
+                    </div>
+                  </div>
+                )}
                 {!reviewData ? (
                   <div className="space-y-5">
                     {!isAiConfigured && (
@@ -656,6 +704,7 @@ export default function Dashboard({
                           key={option.id}
                           type="button"
                           onClick={() => selectImportMode(option.id)}
+                          disabled={loadingAction}
                           className={`flex min-h-24 flex-col items-center justify-center gap-2 rounded-xl border p-3 text-xs font-bold transition ${
                             importMode === option.id
                               ? 'border-emerald-400 bg-emerald-400/10 text-emerald-200'
@@ -712,6 +761,17 @@ export default function Dashboard({
                   </div>
                 ) : (
                   <div className="space-y-5">
+                    <div className="flex items-center justify-between rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-wider text-emerald-200">Import confidence</p>
+                        <p className="mt-0.5 text-xs text-zinc-500">
+                          {reviewData.confidence.rejectedFields} unsupported fields excluded
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-emerald-400/15 px-3 py-1 text-sm font-black text-emerald-300">
+                        {reviewData.confidence.overall}%
+                      </span>
+                    </div>
                     <label className="block">
                       <span className="mb-1.5 block text-xs font-semibold text-zinc-300">Resume name</span>
                       <input
@@ -726,7 +786,9 @@ export default function Dashboard({
                       <span className="mt-1.5 block text-xs text-zinc-500">Use any name that helps identify this version. AI does not choose it for you.</span>
                     </label>
                     <div className="space-y-2">
-                      {reviewSections.map(section => (
+                      {reviewSections.map(section => {
+                        const confidence = reviewData.confidence.sections[reviewConfidenceKey[section.label]];
+                        return (
                         <div
                           key={section.label}
                           className={`flex items-start gap-3 rounded-xl border p-3.5 ${
@@ -738,12 +800,19 @@ export default function Dashboard({
                           {section.ready
                             ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
                             : <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-zinc-600" />}
-                          <div className="min-w-0">
-                            <p className="text-xs font-bold uppercase tracking-wider text-zinc-200">{section.label}</p>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-xs font-bold uppercase tracking-wider text-zinc-200">{section.label}</p>
+                              {confidence && (
+                                <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                                  {confidence.score}% {confidence.level}
+                                </span>
+                              )}
+                            </div>
                             <p className="mt-0.5 truncate text-xs text-zinc-500">{section.detail}</p>
                           </div>
                         </div>
-                      ))}
+                      )})}
                     </div>
                   </div>
                 )}
@@ -757,6 +826,7 @@ export default function Dashboard({
                   <button
                     type="button"
                     onClick={() => reviewData ? setReviewData(null) : resetImport()}
+                    disabled={loadingAction}
                     className="rounded-xl px-4 py-2 text-sm font-semibold text-zinc-400 transition hover:bg-[#2A2E37] hover:text-white"
                   >
                     {reviewData ? 'Back' : 'Cancel'}
@@ -768,7 +838,7 @@ export default function Dashboard({
                     className="flex items-center gap-2 rounded-xl bg-emerald-400 px-5 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {loadingAction ? <Loader2 className="h-4 w-4 animate-spin" /> : reviewData ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-                    <span>{reviewData ? 'Save Imported Resume' : 'Extract and Review'}</span>
+                    <span>{loadingAction ? importStatus : reviewData ? 'Save Imported Resume' : 'Extract and Review'}</span>
                   </button>
                 </div>
               </div>

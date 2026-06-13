@@ -29,6 +29,7 @@ import {
 import { ResumeData, UserSettings, AtsReport, ProfileData, TemplateId } from '../types';
 import { getAuthInstance, getDb, resetFirebaseConfiguration } from '../config/firebase';
 import { DEFAULT_SECTION_ORDER, normalizeSectionOrder } from '../utils/sectionOrder';
+import { normalizeEducationScore } from '../utils/educationScore';
 
 // Firestore error handling with dedicated JSON payload as mandated by SKILL
 export enum OperationType {
@@ -430,7 +431,15 @@ export async function getUserProfile(uid: string): Promise<ProfileData | null> {
   const pRef = doc(getDb(), 'profiles', uid);
   try {
     const s = await getDoc(pRef);
-    return s.exists() ? (s.data() as ProfileData) : null;
+    if (!s.exists()) return null;
+    const profile = s.data() as ProfileData;
+    return {
+      ...profile,
+      education: (profile.education || []).map(entry => ({
+        ...entry,
+        ...normalizeEducationScore(entry as unknown as Record<string, unknown>),
+      })),
+    };
   } catch (err) {
     handleFirestoreError(err, OperationType.GET, `profiles/${uid}`);
   }
@@ -441,6 +450,10 @@ export async function saveUserProfile(uid: string, data: ProfileData): Promise<v
   try {
     await setDoc(pRef, {
       ...data,
+      education: (data.education || []).map(entry => ({
+        ...entry,
+        ...normalizeEducationScore(entry as unknown as Record<string, unknown>),
+      })),
       uid,
       updatedAt: new Date().toISOString(),
     });
@@ -456,6 +469,7 @@ export async function createNewResume(userId: string, title: string, templateId:
   
   const defaultResume: ResumeData = {
     id,
+    ownerId: userId,
     userId,
     title,
     templateId,
@@ -473,7 +487,10 @@ export async function createNewResume(userId: string, title: string, templateId:
       ...initialData?.personalDetails
     },
     summary: initialData?.summary || '',
-    education: initialData?.education || [],
+    education: (initialData?.education || []).map(entry => ({
+      ...entry,
+      ...normalizeEducationScore(entry as unknown as Record<string, unknown>),
+    })),
     experience: initialData?.experience || [],
     projects: initialData?.projects || [],
     skills: initialData?.skills || {
@@ -493,6 +510,7 @@ export async function createNewResume(userId: string, title: string, templateId:
       initialData?.sectionOrder || DEFAULT_SECTION_ORDER,
       (initialData?.customSections || []).map(section => section.id)
     ),
+    sectionOrderMode: initialData?.sectionOrderMode === 'template' ? 'template' : 'custom',
     hiddenSections: initialData?.hiddenSections || [],
     isArchived: false,
     createdAt: now,
@@ -546,12 +564,13 @@ export async function getResume(resumeId: string): Promise<ResumeData | null> {
 }
 
 export async function updateResumeInDb(resumeId: string, updates: Partial<ResumeData>): Promise<void> {
+  const { ownerId: _ownerId, userId: _userId, id: _id, ...safeUpdates } = updates;
   // Update local storage first
   try {
     const cached = localStorage.getItem(`forge_resume_${resumeId}`);
     if (cached) {
       const current = JSON.parse(cached);
-      const merged = { ...current, ...updates, updatedAt: new Date().toISOString() };
+      const merged = { ...current, ...safeUpdates, updatedAt: new Date().toISOString() };
       localStorage.setItem(`forge_resume_${resumeId}`, JSON.stringify(merged));
     }
   } catch (err) {
@@ -561,7 +580,7 @@ export async function updateResumeInDb(resumeId: string, updates: Partial<Resume
   try {
     const rRef = doc(getDb(), 'resumes', resumeId);
     await updateDoc(rRef, {
-      ...updates,
+      ...safeUpdates,
       updatedAt: new Date().toISOString(),
     });
   } catch (err) {
@@ -617,7 +636,7 @@ export function syncLocalResumeCache(resumes: ResumeData[]): void {
 export async function fetchUserResumes(userId: string): Promise<ResumeData[]> {
   const path = 'resumes';
   try {
-    const q = query(collection(getDb(), path), where('userId', '==', userId));
+    const q = query(collection(getDb(), path), where('ownerId', '==', userId));
     const qs = await getDocs(q);
     const results: ResumeData[] = [];
     qs.forEach(d => {
@@ -645,7 +664,7 @@ export async function fetchUserResumes(userId: string): Promise<ResumeData[]> {
 export function subscribeToUserResumes(userId: string, callback: (resumes: ResumeData[]) => void) {
   const path = 'resumes';
   try {
-    const q = query(collection(getDb(), path), where('userId', '==', userId));
+    const q = query(collection(getDb(), path), where('ownerId', '==', userId));
     return onSnapshot(
       q,
       snapshot => {

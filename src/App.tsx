@@ -22,6 +22,11 @@ import Dashboard from './components/Dashboard';
 import ProfileSetup from './components/ProfileSetup';
 import ResumeBuilder from './components/ResumeBuilder';
 import ResumePreview from './components/ResumePreview';
+import {
+  assessResumeImport,
+  ReviewedImport,
+  runAiImportSingleFlight,
+} from './utils/aiImportQuality';
 import ATSAnalyzer from './components/ATSAnalyzer';
 import MyProfile from './components/MyProfile';
 import Settings from './components/Settings';
@@ -35,140 +40,6 @@ interface Toast {
   message: string;
   type: 'success' | 'error' | 'info';
 }
-
-const importId = (prefix: string) =>
-  `${prefix}_${Math.random().toString(36).substring(2, 9)}`;
-
-const asRecord = (value: unknown): Record<string, any> =>
-  value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, any>
-    : {};
-
-const asObjectArray = (value: unknown): Record<string, any>[] => {
-  if (Array.isArray(value)) {
-    return value.filter(item => item && typeof item === 'object' && !Array.isArray(item));
-  }
-  if (!value || typeof value !== 'object') return [];
-
-  const record = value as Record<string, any>;
-  const values = Object.values(record);
-  if (values.length > 0 && values.every(item => item && typeof item === 'object' && !Array.isArray(item))) {
-    return values as Record<string, any>[];
-  }
-  return [record];
-};
-
-const asStringArray = (value: unknown): string[] => {
-  if (Array.isArray(value)) {
-    return value.map(item => String(item ?? '').trim()).filter(Boolean);
-  }
-  if (typeof value === 'string') {
-    return value.split(/[,\n]/).map(item => item.trim()).filter(Boolean);
-  }
-  return [];
-};
-
-const normalizeAiImport = (parsedValue: unknown): Partial<ResumeData> => {
-  const parsed = asRecord(parsedValue);
-  const personal = asRecord(parsed.personalDetails);
-  const skills = asRecord(parsed.skills);
-
-  const imported: Partial<ResumeData> = {
-    personalDetails: {
-      fullName: String(personal.fullName || '').trim(),
-      professionalTitle: String(personal.professionalTitle || '').trim(),
-      email: String(personal.email || '').trim(),
-      phone: String(personal.phone || '').trim(),
-      location: String(personal.location || '').trim(),
-      linkedin: String(personal.linkedin || '').trim(),
-      github: String(personal.github || '').trim(),
-      website: String(personal.website || '').trim(),
-      profilePhoto: '',
-    },
-    summary: typeof parsed.summary === 'string' ? parsed.summary.trim() : '',
-    education: asObjectArray(parsed.education).map(entry => ({
-      id: importId('edu'),
-      degree: String(entry.degree || ''),
-      institution: String(entry.institution || ''),
-      location: String(entry.location || ''),
-      startDate: String(entry.startDate || ''),
-      endDate: String(entry.endDate || ''),
-      gpa: String(entry.gpa || ''),
-      description: String(entry.description || ''),
-    })),
-    experience: asObjectArray(parsed.experience).map(entry => ({
-      id: importId('exp'),
-      title: String(entry.title || entry.role || ''),
-      company: String(entry.company || ''),
-      location: String(entry.location || ''),
-      startDate: String(entry.startDate || ''),
-      endDate: String(entry.endDate || ''),
-      description: String(entry.description || ''),
-    })),
-    internships: asObjectArray(parsed.internships).map(entry => ({
-      id: importId('intern'),
-      role: String(entry.role || entry.title || ''),
-      company: String(entry.company || ''),
-      location: String(entry.location || ''),
-      startDate: String(entry.startDate || ''),
-      endDate: String(entry.endDate || ''),
-      description: String(entry.description || ''),
-      technologiesUsed: String(entry.technologiesUsed || entry.technologies || ''),
-    })),
-    projects: asObjectArray(parsed.projects).map(entry => ({
-      id: importId('proj'),
-      name: String(entry.name || entry.title || ''),
-      description: String(entry.description || ''),
-      technologies: String(entry.technologies || ''),
-      github: String(entry.github || ''),
-      live: String(entry.live || ''),
-    })),
-    skills: {
-      programmingLanguages: asStringArray(skills.programmingLanguages),
-      frameworks: asStringArray(skills.frameworks),
-      tools: asStringArray(skills.tools),
-      databases: asStringArray(skills.databases),
-      softSkills: asStringArray(skills.softSkills),
-    },
-    certifications: asObjectArray(parsed.certifications).map(entry => ({
-      id: importId('cert'),
-      name: String(entry.name || entry.title || ''),
-      issuer: String(entry.issuer || ''),
-      date: String(entry.date || ''),
-      url: String(entry.url || ''),
-    })),
-    achievements: asStringArray(parsed.achievements),
-    volunteering: asObjectArray(parsed.volunteering).map(entry => ({
-      id: importId('vol'),
-      title: String(entry.title || entry.role || ''),
-      company: String(entry.company || entry.organization || ''),
-      location: String(entry.location || ''),
-      startDate: String(entry.startDate || ''),
-      endDate: String(entry.endDate || ''),
-      description: String(entry.description || ''),
-    })),
-    languages: asStringArray(parsed.languages),
-  };
-
-  const hasContent = Boolean(
-    imported.personalDetails?.fullName ||
-    imported.personalDetails?.email ||
-    imported.summary ||
-    imported.education?.length ||
-    imported.experience?.length ||
-    imported.internships?.length ||
-    imported.projects?.length ||
-    imported.certifications?.length ||
-    imported.achievements?.length ||
-    Object.values(imported.skills || {}).some(items => items.length > 0)
-  );
-
-  if (!hasContent) {
-    throw new Error('AI could not find usable resume content. No resume was created.');
-  }
-
-  return imported;
-};
 
 export default function App() {
   const [firebaseReady, setFirebaseReady] = useState(isFirebaseConfigured());
@@ -439,7 +310,7 @@ export default function App() {
     }, 1000); // 1-second debounce for stellar performance
   };
 
-  const handleParseResumeImport = async (rawText: string): Promise<Partial<ResumeData>> => {
+  const handleParseResumeImport = async (rawText: string): Promise<ReviewedImport<ResumeData>> => {
     if (!user) throw new Error('You must be signed in to import a resume.');
 
     const provider = effectiveSettings.aiProvider || 'Groq';
@@ -453,8 +324,10 @@ export default function App() {
       throw new Error(`Please configure your ${provider} API key first.`);
     }
 
-    const parsedJson = await aiParseResume(effectiveSettings, rawText);
-    return normalizeAiImport(parsedJson);
+    return runAiImportSingleFlight(async () => {
+      const parsedJson = await aiParseResume(effectiveSettings, rawText);
+      return assessResumeImport(parsedJson, rawText);
+    });
   };
 
   const handleSaveResumeImport = async (importedData: Partial<ResumeData>) => {

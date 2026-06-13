@@ -31,6 +31,8 @@ export interface PersonalDetails {
   profilePhoto?: string;
 }
 
+export type EducationScoreType = 'cgpa' | 'gpa' | 'percentage';
+
 export interface EducationEntry {
   id: string;
   degree: string;
@@ -39,6 +41,7 @@ export interface EducationEntry {
   startDate: string;
   endDate: string;
   gpa: string;
+  scoreType?: EducationScoreType;
   description: string;
 }
 
@@ -57,6 +60,8 @@ export interface ProjectEntry {
   name: string;
   description: string;
   technologies: string;
+  startDate?: string;
+  endDate?: string;
   github: string;
   live: string;
 }
@@ -104,6 +109,7 @@ export interface CustomSection {
 
 export interface ResumeData {
   id: string;
+  ownerId: string;
   userId: string;
   title: string;
   templateId: TemplateId;
@@ -121,6 +127,7 @@ export interface ResumeData {
   languages: string[];
   customSections: CustomSection[];
   sectionOrder: string[];
+  sectionOrderMode?: 'template' | 'custom';
   hiddenSections: string[];
   isArchived: boolean;
   createdAt: string;
@@ -168,20 +175,69 @@ export interface AtsReport {
   resumeId: string;
   userId: string;
   jobDescription: string;
-  score: number;
+  atsScore: number;
+  matchScore: number | null;
   breakdown: {
-    formatting: number;
+    parsing: number;
+    contact: number;
+    completeness: number;
     skills: number;
     experience: number;
-    keyword: number;
-    education: number;
+    projects: number;
+    readability: number;
   };
-  matchScore: number;
-  keywordCoverage: number;
-  missingSkills: string[];
-  missingKeywords: string[];
-  suggestedImprovements: string[];
+  pageFitDetails: {
+    score: number;
+    estimatedPages: number;
+    fitCategory: 'single-page safe' | 'near limit' | 'multi-page likely';
+    overflowRisk: 'low' | 'medium' | 'high';
+  };
+  keywordGaps: {
+    missing: string[];
+    weakCoverage: string[];
+    strongCoverage: string[];
+  };
+  skillAnalysis: {
+    coveragePercent: number;
+    diversityScore: number;
+    visible: boolean;
+    placement: 'main' | 'sidebar';
+    templateFamily: 'ats' | 'student' | 'business' | 'creative' | 'unknown';
+  };
+  projectAnalysis: {
+    hasLinks: number;
+    hasMetrics: number;
+    qualityScore: number;
+  };
+  targetComparison: {
+    roleFamily:
+      | 'software-development'
+      | 'cybersecurity'
+      | 'data-analytics'
+      | 'product-startup'
+      | 'design-creative'
+      | 'general-other';
+    roleFamilyLabel: string;
+    keywordOverlap: number;
+    roleRelevance: number;
+    skillAlignment: number;
+    projectEvidence: number;
+    experienceEvidence: number;
+    missingCriticalSkills: string[];
+    positionalKeywords: string[];
+    strongEvidence: string[];
+    weakEvidence: string[];
+  } | null;
+  analysisModules: Array<{
+    id: 'content' | 'structure' | 'evidence' | 'roleMatch' | 'pageFit' | 'synthesis';
+    label: string;
+    score: number;
+    status: 'passed' | 'review';
+    evidence: string;
+  }>;
   strengths: string[];
-  weaknesses: string[];
+  missingItems: string[];
+  warnings: string[];
+  recommendations: string[];
   createdAt: string;
 }

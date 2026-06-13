@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ResumeData, AtsReport, ProfileData, UserSettings } from '../types';
-import { aiDeepAnalyzeAtsWithGroq } from '../services/groq';
 import { saveAtsReport, fetchUserAtsReports } from '../services/firebase';
-import { validateResumeText, parseResumeTextLocally, analyzeAtsLocally, LocalAtsResult } from '../utils/atsEngine';
+import {
+  validateResumeText,
+  parseResumeTextLocally,
+  analyzeAtsLocally,
+  profileFromResumeData,
+  LocalAtsResult,
+  AtsSourceKind,
+} from '../utils/advancedAtsEngine';
 import { serializeResumeBySectionOrder } from '../utils/sectionOrder';
+import { extractResumeText } from '../utils/resumeImport';
 import { motion, AnimatePresence } from 'motion/react';
-
-// @ts-ignore
-import * as pdfjsLib from 'pdfjs-dist';
-// @ts-ignore
-import * as mammoth from 'mammoth';
-import Tesseract from 'tesseract.js';
 
 import {
   FileText,
@@ -43,9 +44,6 @@ import {
   BookMarked
 } from 'lucide-react';
 
-// Setup workers for PDF.js - pointing tocdnjs CDN (very robust for Vite)
-pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js";
-
 interface ATSAnalyzerProps {
   resumes: ResumeData[];
   userUid: string;
@@ -55,7 +53,50 @@ interface ATSAnalyzerProps {
 }
 
 type Mode = 'upload' | 'preset';
-type ProgressStep = 'idle' | 'reading' | 'ocr' | 'validating' | 'parsing' | 'scoring' | 'ai' | 'completed';
+type ScanType = 'general' | 'targeted';
+type ProgressStep =
+  | 'idle'
+  | 'reading'
+  | 'ocr'
+  | 'validating'
+  | 'extraction'
+  | 'structure'
+  | 'evidence'
+  | 'roleMatch'
+  | 'pageFit'
+  | 'synthesis'
+  | 'completed';
+
+const hydrateHistoricMetrics = (report: AtsReport): LocalAtsResult => ({
+  atsScore: report.atsScore,
+  matchScore: report.matchScore,
+  breakdown: report.breakdown,
+  pageFitDetails: report.pageFitDetails,
+  keywordGaps: report.keywordGaps,
+  skillAnalysis: report.skillAnalysis,
+  projectAnalysis: report.projectAnalysis,
+  targetComparison: report.targetComparison ? {
+    roleFamily: report.targetComparison.roleFamily || 'general-other',
+    roleFamilyLabel: report.targetComparison.roleFamilyLabel || 'General / Other',
+    keywordOverlap: report.targetComparison.keywordOverlap,
+    roleRelevance: report.targetComparison.roleRelevance,
+    skillAlignment: report.targetComparison.skillAlignment,
+    projectEvidence: report.targetComparison.projectEvidence,
+    experienceEvidence: report.targetComparison.experienceEvidence,
+    missingCriticalSkills: report.targetComparison.missingCriticalSkills,
+    positionalKeywords: report.targetComparison.positionalKeywords,
+    strongEvidence: report.targetComparison.strongEvidence || [],
+    weakEvidence: report.targetComparison.weakEvidence || [],
+  } : null,
+  analysisModules: report.analysisModules || [],
+  strengths: report.strengths,
+  missingItems: report.missingItems,
+  warnings: report.warnings,
+  recommendations: report.recommendations,
+});
+
+const analysisPause = (milliseconds: number) =>
+  new Promise(resolve => window.setTimeout(resolve, milliseconds));
 
 // ============================================================
 // JOB DESCRIPTION LIBRARY — 17 professional categories
@@ -287,12 +328,12 @@ const JD_LIBRARY: Record<string, { title: string; description: string }> = {
 export default function ATSAnalyzer({
   resumes,
   userUid,
-  settings,
   showToasts,
   activeResumeId,
 }: ATSAnalyzerProps) {
   // Input states
   const [activeMode, setActiveMode] = useState<Mode>('upload');
+  const [scanType, setScanType] = useState<ScanType>('general');
   const [jdCategory, setJdCategory] = useState<string>('softwareEngineer');
   const [selectedResumeId, setSelectedResumeId] = useState<string>('');
   const [jobDescription, setJobDescription] = useState('');
@@ -310,10 +351,15 @@ export default function ATSAnalyzer({
   // Results State
   const [localMetrics, setLocalMetrics] = useState<LocalAtsResult | null>(null);
   const [parsedCandidateJson, setParsedCandidateJson] = useState<ProfileData | null>(null);
-  const [aiReport, setAiReport] = useState<any | null>(null);
   const [historicReports, setHistoricReports] = useState<AtsReport[]>([]);
   const [savingReport, setSavingReport] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
+  const presentationReport = localMetrics ? {
+    strengths: localMetrics.strengths,
+    weaknesses: localMetrics.warnings,
+    recommendations: localMetrics.recommendations,
+    atsOptimizationAdvice: 'Recommendations are informational and never change parsing, match, or page-fit scores.',
+  } : null;
 
   // Cancellation tokens
   const isCancelledRef = useRef<boolean>(false);
@@ -322,6 +368,7 @@ export default function ATSAnalyzer({
   const loadSampleJD = () => {
     const entry = JD_LIBRARY[jdCategory];
     if (!entry) return;
+    setScanType('targeted');
     setJobDescription(entry.description);
     showToasts(`Loaded "${entry.title}" sample job description!`, 'success');
   };
@@ -341,7 +388,9 @@ export default function ATSAnalyzer({
     try {
       const list = await fetchUserAtsReports(userUid);
       setHistoricReports(
-        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        list
+          .filter(report => Number.isFinite(report.atsScore))
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       );
     } catch (err) {
       console.error('Error fetching historical ATS scores:', err);
@@ -358,11 +407,29 @@ export default function ATSAnalyzer({
     if (cached) {
       try {
         const data = JSON.parse(cached);
-        if (data.localMetrics && data.parsedResume && data.aiReport) {
-          setLocalMetrics(data.localMetrics);
+        if (
+          Number.isFinite(data.localMetrics?.atsScore) &&
+          data.localMetrics?.breakdown &&
+          data.localMetrics?.pageFitDetails &&
+          data.localMetrics?.keywordGaps &&
+          data.parsedResume
+        ) {
+          setLocalMetrics({
+            ...data.localMetrics,
+            analysisModules: data.localMetrics.analysisModules || [],
+            targetComparison: data.localMetrics.targetComparison ? {
+              ...data.localMetrics.targetComparison,
+              roleFamily: data.localMetrics.targetComparison.roleFamily || 'general-other',
+              roleFamilyLabel: data.localMetrics.targetComparison.roleFamilyLabel || 'General / Other',
+              strongEvidence: data.localMetrics.targetComparison.strongEvidence || [],
+              weakEvidence: data.localMetrics.targetComparison.weakEvidence || [],
+            } : null,
+          });
           setParsedCandidateJson(data.parsedResume);
-          setAiReport(data.aiReport);
+          setScanType(data.scanType === 'general' ? 'general' : 'targeted');
           setProgressStep('completed');
+        } else {
+          localStorage.removeItem(`ats_cache_${userUid}`);
         }
       } catch {
         // clear corrupted cache
@@ -381,6 +448,11 @@ export default function ATSAnalyzer({
 
   // Extract from PDF Helper
   const extractPdfText = async (targetFile: File): Promise<string> => {
+    const pdfjsLib = await import('pdfjs-dist');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+      'pdfjs-dist/build/pdf.worker.min.mjs',
+      import.meta.url
+    ).href;
     const arrayBuffer = await targetFile.arrayBuffer();
     const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
     const pdf = await loadingTask.promise;
@@ -393,7 +465,24 @@ export default function ATSAnalyzer({
       setProgressStatusMsg(`Extracting PDF Text (Page ${i} of ${numPages})...`);
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(' ');
+      const positionedItems = textContent.items
+        .filter((item: any) => item.str?.trim())
+        .map((item: any) => ({
+          text: item.str.trim(),
+          x: item.transform?.[4] || 0,
+          y: item.transform?.[5] || 0,
+        }))
+        .sort((a, b) => Math.abs(b.y - a.y) > 2 ? b.y - a.y : a.x - b.x);
+      const lines: Array<{ y: number; items: Array<{ text: string; x: number }> }> = [];
+      positionedItems.forEach(item => {
+        const line = lines.find(candidate => Math.abs(candidate.y - item.y) <= 2);
+        if (line) line.items.push({ text: item.text, x: item.x });
+        else lines.push({ y: item.y, items: [{ text: item.text, x: item.x }] });
+      });
+      const pageText = lines
+        .sort((a, b) => b.y - a.y)
+        .map(line => line.items.sort((a, b) => a.x - b.x).map(item => item.text).join(' '))
+        .join('\n');
       resultText += pageText + '\n';
     }
     return resultText;
@@ -402,6 +491,7 @@ export default function ATSAnalyzer({
   // Extract from DOCX Helper
   const extractDocxText = async (targetFile: File): Promise<string> => {
     setProgressStatusMsg('Reading Word DOCX with Mammoth...');
+    const mammoth = (await import('mammoth')).default;
     const arrayBuffer = await targetFile.arrayBuffer();
     const result = await mammoth.extractRawText({ arrayBuffer });
     return result.value || '';
@@ -410,6 +500,7 @@ export default function ATSAnalyzer({
   // Extract from Image Helper using Tesseract
   const extractImageTextOCR = async (targetFile: File): Promise<string> => {
     setProgressStatusMsg('Initializing OCR worker engine...');
+    const Tesseract = (await import('tesseract.js')).default;
     
     return new Promise((resolve, reject) => {
       Tesseract.recognize(
@@ -436,12 +527,14 @@ export default function ATSAnalyzer({
     isCancelledRef.current = false;
     setIsSaved(false);
 
-    if (!jobDescription.trim() || jobDescription.trim().length < 50) {
+    if (scanType === 'targeted' && (!jobDescription.trim() || jobDescription.trim().length < 50)) {
       showToasts('Please paste a substantial target Job Description (minimum 50 characters).', 'error');
       return;
     }
 
     let extractedRawText = '';
+    let structuredPreset: ProfileData | null = null;
+    let analysisSource: AtsSourceKind = activeMode === 'preset' ? 'structured' : 'text-pdf';
 
     try {
       if (activeMode === 'upload') {
@@ -456,12 +549,24 @@ export default function ATSAnalyzer({
         const fileExt = file.name.split('.').pop()?.toLowerCase();
 
         if (fileExt === 'pdf') {
+          analysisSource = 'text-pdf';
           setProgressStatusMsg('Extracting PDF text components...');
           extractedRawText = await extractPdfText(file);
+          if (extractedRawText.trim().split(/\s+/).length < 80) {
+            setProgressStep('ocr');
+            setProgressStatusMsg('Selectable text is limited. Running OCR on scanned PDF pages...');
+            const ocrText = await extractResumeText(file, 'pdf');
+            if (ocrText.trim().length > extractedRawText.trim().length) {
+              extractedRawText = ocrText;
+              analysisSource = 'image-ocr';
+            }
+          }
         } else if (fileExt === 'docx') {
+          analysisSource = 'docx';
           setProgressStatusMsg('Extracting DOCX text structures...');
           extractedRawText = await extractDocxText(file);
         } else if (['png', 'jpg', 'jpeg'].includes(fileExt || '')) {
+          analysisSource = 'image-ocr';
           setProgressStep('ocr');
           setProgressStatusMsg('Analyzing image vectors...');
           extractedRawText = await extractImageTextOCR(file);
@@ -478,9 +583,10 @@ export default function ATSAnalyzer({
           return;
         }
 
-        setProgressStep('parsing');
+        setProgressStep('extraction');
         setProgressStatusMsg('Compiling preset database profile content...');
         extractedRawText = serializeResumeBySectionOrder(selectedResume);
+        structuredPreset = profileFromResumeData(selectedResume, userUid);
       }
 
       if (isCancelledRef.current) return;
@@ -488,91 +594,77 @@ export default function ATSAnalyzer({
       // 1. FILE VALIDATION SECTOR
       setProgressStep('validating');
       setProgressStatusMsg('Validating document coordinates...');
-      const validation = validateResumeText(extractedRawText);
-      if (!validation.isValid) {
-        showToasts(validation.error || 'Validation failure', 'error');
-        setProgressStep('idle');
-        return;
+      if (!structuredPreset) {
+        const validation = validateResumeText(extractedRawText);
+        if (!validation.isValid) {
+          showToasts(validation.error || 'Validation failure', 'error');
+          setProgressStep('idle');
+          return;
+        }
       }
 
       // 2. RESUME STRUCTURE PARSING LOCALLY
-      setProgressStep('parsing');
+      setProgressStep('structure');
       setProgressStatusMsg('Parsing sections into structured indices...');
-      const parsedResume = parseResumeTextLocally(extractedRawText, userUid);
+      const parsedResume = structuredPreset || parseResumeTextLocally(extractedRawText, userUid);
 
       if (isCancelledRef.current) return;
 
       // 3. SECURE LOCAL ATS ENGINE SCORING MATCH CALCULATIONS
-      setProgressStep('scoring');
-      setProgressStatusMsg('Calculating deterministic performance matrices...');
-      const localResult = analyzeAtsLocally(parsedResume, jobDescription);
+      setProgressStep('evidence');
+      setProgressStatusMsg('Normalizing skill categories and validating evidence...');
+      const effectiveJobDescription = scanType === 'targeted' ? jobDescription : '';
+      const localResult = analyzeAtsLocally(
+        parsedResume,
+        effectiveJobDescription,
+        extractedRawText,
+        {
+          sourceKind: analysisSource,
+          templateId: activeMode === 'preset'
+            ? resumes.find(candidate => candidate.id === selectedResumeId)?.templateId
+            : undefined,
+          hiddenSections: activeMode === 'preset'
+            ? resumes.find(candidate => candidate.id === selectedResumeId)?.hiddenSections
+            : undefined,
+        }
+      );
 
       if (isCancelledRef.current) return;
-
-      // 4. DEEP AI ENRICHMENT
-      setProgressStep('ai');
-      setProgressStatusMsg('Generating deep recommendations via AI engine...');
-      
-      let aiResponse: any = null;
-      try {
-        aiResponse = await aiDeepAnalyzeAtsWithGroq(
-          settings,
-          parsedResume,
-          jobDescription,
-          {
-            score: localResult.atsScore,
-            matchScore: localResult.matchScore,
-            keywordCoverage: localResult.keywordCoverage,
-            missingSkills: localResult.missingSkills,
-            missingKeywords: localResult.missingKeywords
-          }
-        );
-      } catch (aiErr) {
-        console.error('AI connection error, preparing local fallback:', aiErr);
-      }
-
-      // If groq API was skipped or failed, fallback to local metrics formatted cleanly
-      if (!aiResponse) {
-        aiResponse = {
-          strengths: [
-            parsedResume.experience.length > 0 ? 'Document contains a complete work profile' : 'Good fundamental base elements',
-            parsedResume.education.length > 0 ? 'Verified academic timelines listed' : 'Essential skills section mapped',
-            localResult.matchedSkills.length > 0 ? `Successfully aligned ${localResult.matchedSkills.length} key attributes` : 'Proper alignment index'
-          ],
-          weaknesses: [
-            localResult.missingKeywords.length > 5 ? 'High omission of positional job descriptions keywords' : 'Needs slightly deeper metric highlights',
-            parsedResume.personalDetails.linkedin ? 'Contact indices complete' : 'Lacks modern professional networking coordinates'
-          ],
-          missingKeywords: localResult.missingKeywords.slice(0, 10),
-          missingSkills: localResult.missingSkills.slice(0, 10),
-          recommendations: [
-            'Integrate listed job skills inside active experience descriptors.',
-            'Sprinkle quantitative achievements, demonstrating metrics over simple assignments.',
-            'Clean structural blocks to highlight certifications above standard headers.'
-          ],
-          atsOptimizationAdvice: 'Review alignment scoring. Optimize the visual content hierarchy using a single column, highly-readable standard ATS template with specific titles.',
-          rewriteRecommendations: [
-            {
-              original: "Responsible for coding frontend screens and handling UI requests.",
-              optimized: "Pioneered interactive UI interfaces using React & TypeScript, boosting site interaction index by 24%.",
-              explanation: "Uses strong action verbs and quantifiable metrics."
-            }
-          ]
-        };
+      const consolidationStages: Array<{
+        step: Exclude<
+          ProgressStep,
+          'idle' | 'reading' | 'ocr' | 'validating' | 'extraction' | 'structure' | 'completed'
+        >;
+        message: string;
+      }> = [
+        { step: 'evidence', message: `Resume evidence validated across skills, experience, and projects.` },
+        {
+          step: 'roleMatch',
+          message: localResult.targetComparison
+            ? `${localResult.targetComparison.roleFamilyLabel} role evidence weighted by section.`
+            : 'General ATS evidence indexed without a target role.',
+        },
+        { step: 'pageFit', message: `Page-fit module estimates ${localResult.pageFitDetails.estimatedPages} pages.` },
+        { step: 'synthesis', message: 'Consolidating module evidence into the final score...' },
+      ];
+      for (const stage of consolidationStages) {
+        setProgressStep(stage.step);
+        setProgressStatusMsg(stage.message);
+        await analysisPause(180);
+        if (isCancelledRef.current) return;
       }
 
       // Save references in states
       setParsedCandidateJson(parsedResume);
       setLocalMetrics(localResult);
-      setAiReport(aiResponse);
       setProgressStep('completed');
-      showToasts('ATS Match Diagnostics Completed!', 'success');
+      showToasts(scanType === 'general' ? 'General ATS scan completed!' : 'ATS match diagnostics completed!', 'success');
 
       // Cache report locally in localStorage to avoid re-calls
       localStorage.setItem(`ats_cache_${userUid}`, JSON.stringify({
         localMetrics: localResult,
         parsedResume,
-        aiReport: aiResponse
+        scanType,
       }));
 
     } catch (err: any) {
@@ -585,7 +677,7 @@ export default function ATSAnalyzer({
 
   // Save parsed diagnostics report to Firebase history (Explicitly on user choice)
   const handleSaveToCloud = async () => {
-    if (!localMetrics || !parsedCandidateJson || !aiReport) return;
+    if (!localMetrics || !parsedCandidateJson) return;
 
     setSavingReport(true);
     try {
@@ -593,16 +685,8 @@ export default function ATSAnalyzer({
         id: 'rep_' + Math.random().toString(36).substring(2, 11),
         resumeId: selectedResumeId || 'uploaded_document',
         userId: userUid,
-        jobDescription,
-        score: localMetrics.atsScore,
-        breakdown: localMetrics.breakdown,
-        matchScore: localMetrics.matchScore,
-        keywordCoverage: localMetrics.keywordCoverage,
-        missingSkills: aiReport.missingSkills || localMetrics.missingSkills,
-        missingKeywords: aiReport.missingKeywords || localMetrics.missingKeywords,
-        suggestedImprovements: aiReport.recommendations || [],
-        strengths: aiReport.strengths || [],
-        weaknesses: aiReport.weaknesses || [],
+        jobDescription: scanType === 'targeted' ? jobDescription : '',
+        ...localMetrics,
         createdAt: new Date().toISOString()
       };
 
@@ -653,7 +737,6 @@ export default function ATSAnalyzer({
     localStorage.removeItem(`ats_cache_${userUid}`);
     setLocalMetrics(null);
     setParsedCandidateJson(null);
-    setAiReport(null);
     setProgressStep('idle');
     setFile(null);
     setIsSaved(false);
@@ -671,12 +754,6 @@ export default function ATSAnalyzer({
     return 'bg-rose-500';
   };
 
-  const getScoreGradeText = (score: number) => {
-    if (score >= 80) return { title: 'Premium Match', text: 'Excellent, resume format matches JD filters beautifully.', border: 'border-emerald-200/50 dark:border-emerald-900/30' };
-    if (score >= 60) return { title: 'Good Fit', text: 'Satisfactory. Missing specific keywords to hit target.', border: 'border-amber-200/50 dark:border-amber-900/30' };
-    return { title: 'High Rejection Risk', text: 'Shortcomings found in core skillsets or section layout.', border: 'border-rose-200/50 dark:border-rose-900/30' };
-  };
-
   return (
     <div className="forge-product-page forge-ats-page mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 print:p-0" id="ats-root-analyzer">
       {/* HEADER ROW - Hidden in Print */}
@@ -688,7 +765,7 @@ export default function ATSAnalyzer({
             <span>ATS match analysis</span>
           </h2>
           <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500 font-medium leading-normal animate-fade">
-            Compare a resume against a target role and turn gaps into focused improvements.
+            Check general ATS readiness or compare a resume against a specific target role.
           </p>
         </div>
       </div>
@@ -698,26 +775,64 @@ export default function ATSAnalyzer({
         {/* LEFT COMPONENT: ANALYZE CONTROLS - Hidden in Print & Completed results view */}
         <div className={`lg:col-span-12 xl:col-span-5 space-y-6 print:hidden ${progressStep === 'completed' ? 'xl:hidden' : ''}`}>
           
-          {/* JOB DESCRIPTION CARD */}
+          {/* SCAN TYPE AND JOB DESCRIPTION CARD */}
           <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-xs">
-            <div className="flex items-center justify-between mb-4">
+            <div className="mb-4">
               <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-50 uppercase tracking-widest flex items-center gap-2">
-                <FileText className="h-4 w-4 text-indigo-500" />
-                <span>1. Target job description</span>
+                <TrendingUp className="h-4 w-4 text-teal-500" />
+                <span>1. Choose scan type</span>
               </h3>
+              <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                General scans measure ATS readiness. Targeted scans also measure fit against a job description.
+              </p>
             </div>
-            <textarea
-              value={jobDescription}
-              onChange={e => setJobDescription(e.target.value)}
-              rows={8}
-              placeholder="Paste the job description, required skills, responsibilities, and qualifications..."
-              className="w-full px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/50 text-xs focus:bg-white dark:focus:bg-zinc-900 dark:text-white transition outline-none font-sans"
-              id="ats-jd-input"
-            />
-            <div className="mt-1 flex justify-between text-[10px] text-zinc-400 font-medium">
-              <span>Paste the complete role description</span>
-              <span>{jobDescription.trim().length} chars</span>
+
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="group" aria-label="ATS scan type">
+              <button
+                type="button"
+                onClick={() => setScanType('general')}
+                aria-pressed={scanType === 'general'}
+                className={`forge-ats-mode-button ${scanType === 'general' ? 'is-active' : ''}`}
+              >
+                <CheckCircle className="h-4 w-4" />
+                <span>
+                  <strong>General ATS scan</strong>
+                  <small>No job description needed</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setScanType('targeted')}
+                aria-pressed={scanType === 'targeted'}
+                className={`forge-ats-mode-button ${scanType === 'targeted' ? 'is-active' : ''}`}
+              >
+                <Search className="h-4 w-4" />
+                <span>
+                  <strong>Targeted match</strong>
+                  <small>Compare against a role</small>
+                </span>
+              </button>
             </div>
+
+            {scanType === 'targeted' && (
+              <div className="mt-5">
+                <label htmlFor="ats-jd-input" className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                  Target job description
+                </label>
+                <textarea
+                  value={jobDescription}
+                  onChange={e => setJobDescription(e.target.value)}
+                  rows={8}
+                  placeholder="Paste the job description, required skills, responsibilities, and qualifications..."
+                  className="w-full px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/50 text-xs focus:bg-white dark:focus:bg-zinc-900 dark:text-white transition outline-none font-sans"
+                  id="ats-jd-input"
+                />
+                <div className="mt-1 flex justify-between text-[10px] text-zinc-400 font-medium">
+                  <span>Minimum 50 characters</span>
+                  <span>{jobDescription.trim().length} chars</span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* INPUT METHOD PREFERENCES CARD */}
@@ -847,11 +962,14 @@ export default function ATSAnalyzer({
             <div className="mt-6">
               <button
                 onClick={triggerATSAnalysis}
-                disabled={activeMode === 'upload' ? !file : !selectedResumeId}
-                className="w-full flex items-center justify-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-550 text-white px-4 py-2.5 text-xs font-bold shadow-xs active:scale-[0.99] transition disabled:opacity-40 cursor-pointer select-none"
+                disabled={
+                  (activeMode === 'upload' ? !file : !selectedResumeId) ||
+                  (scanType === 'targeted' && jobDescription.trim().length < 50)
+                }
+                className="forge-ats-primary-button w-full"
               >
-                <Sparkles className="h-4 w-4 text-yellow-300 fill-current" />
-                <span>Run ATS scan</span>
+                <Sparkles className="h-4 w-4" />
+                <span>{scanType === 'general' ? 'Run general ATS scan' : 'Run targeted ATS scan'}</span>
               </button>
             </div>
           </div>
@@ -868,43 +986,19 @@ export default function ATSAnalyzer({
                   <div
                     key={h.id}
                     onClick={() => {
-                      // Mock load cached report
-                      setLocalMetrics({
-                        atsScore: h.score,
-                        matchScore: h.matchScore,
-                        keywordCoverage: h.keywordCoverage,
-                        breakdown: h.breakdown,
-                        matchedKeywords: [], // simplified load
-                        missingKeywords: h.missingKeywords,
-                        matchedSkills: [],
-                        missingSkills: h.missingSkills,
-                        formattingFeedback: [],
-                        experienceStats: {
-                          yearsOfExperience: 5,
-                          actionVerbsCount: 8,
-                          verbsUsed: [],
-                          quantifiedMetricsCount: 2,
-                          relevanceScore: 85
-                        }
-                      });
-                      setAiReport({
-                        strengths: h.strengths,
-                        weaknesses: h.weaknesses,
-                        missingKeywords: h.missingKeywords,
-                        missingSkills: h.missingSkills,
-                        recommendations: h.suggestedImprovements,
-                        atsOptimizationAdvice: 'Review historically collected metrics directly.',
-                        rewriteRecommendations: []
-                      });
+                      setLocalMetrics(hydrateHistoricMetrics(h));
                       setJobDescription(h.jobDescription);
+                      setScanType(h.jobDescription.trim() ? 'targeted' : 'general');
                       setProgressStep('completed');
                       setIsSaved(true);
-                      showToasts(`Opened saved ATS report (${h.score}%).`, 'info');
+                      showToasts(`Opened saved ATS report (${h.atsScore}% ATS).`, 'info');
                     }}
                     className="p-3 rounded-xl border border-gray-100 dark:border-gray-901 hover:border-indigo-400 bg-gray-50/40 dark:bg-gray-900/10 flex items-center justify-between cursor-pointer transition text-xs"
                   >
                     <div>
-                      <span className="font-bold text-gray-800 dark:text-gray-200">ATS Score: {h.score}%</span>
+                      <span className="font-bold text-gray-800 dark:text-gray-200">
+                        ATS {h.atsScore}%{h.matchScore !== null ? ` · Match ${h.matchScore}%` : ''}
+                      </span>
                       <span className="text-[10px] text-gray-400 block mt-0.5">{new Date(h.createdAt).toLocaleDateString()}</span>
                     </div>
                     <span className="rounded bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 font-bold text-[9px] text-indigo-500">
@@ -946,9 +1040,13 @@ export default function ATSAnalyzer({
                         progressStep === 'reading' ? '20%' :
                         progressStep === 'ocr' ? `${Math.max(25, ocrProgress)}%` :
                         progressStep === 'validating' ? '45%' :
-                        progressStep === 'parsing' ? '65%' :
-                        progressStep === 'scoring' ? '80%' :
-                        progressStep === 'ai' ? '95%' : '100%'
+                        progressStep === 'extraction' ? '58%' :
+                        progressStep === 'structure' ? '68%' :
+                        progressStep === 'evidence' ? '78%' :
+                        progressStep === 'roleMatch' ? '86%' :
+                        progressStep === 'pageFit' ? '92%' :
+                        progressStep === 'synthesis' ? '97%' :
+                        '100%'
                     }}
                   />
                 </div>
@@ -969,11 +1067,18 @@ export default function ATSAnalyzer({
           {progressStep === 'idle' && (
             <div className="rounded-3xl border-2 border-dashed border-gray-200 dark:border-gray-800 min-h-[460px] flex flex-col items-center justify-center p-8 text-center print:hidden">
               <TrendingUp className="w-12 h-12 text-gray-300 dark:text-gray-700 mb-4" />
-              <h3 className="font-bold text-base text-gray-900 dark:text-white">Check your resume against a role</h3>
+              <h3 className="font-bold text-base text-gray-900 dark:text-white">Measure ATS readiness</h3>
               <p className="text-xs text-gray-400 max-w-xs mt-1 mb-6">
-                Paste a target job description, choose a resume, and review the match score and missing keywords.
+                Run a general score without a job description, or load a sample role for targeted matching.
               </p>
               <div className="flex gap-2 flex-wrap justify-center">
+                <button
+                  type="button"
+                  onClick={() => setScanType('general')}
+                  className="forge-ats-secondary-button"
+                >
+                  General scan
+                </button>
                 <select
                   value={jdCategory}
                   onChange={e => setJdCategory(e.target.value)}
@@ -985,7 +1090,8 @@ export default function ATSAnalyzer({
                 </select>
                 <button
                   onClick={loadSampleJD}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+                  type="button"
+                  className="forge-ats-sample-button"
                 >
                   Load Sample JD
                 </button>
@@ -994,7 +1100,7 @@ export default function ATSAnalyzer({
           )}
 
           {/* DETAILED RESULTS DASHBOARD (COMPLETED) */}
-          {progressStep === 'completed' && localMetrics && aiReport && (
+          {progressStep === 'completed' && localMetrics && presentationReport && (
             <div className="space-y-6" id="ats-diagnostic-report">
               
               {/* RESULTS WORKSPACE ACTION BAR - Hidden in Print */}
@@ -1039,140 +1145,259 @@ export default function ATSAnalyzer({
                 </div>
               </div>
 
-              {/* OVERALL ATS SCORE CARD */}
-              <div className={`rounded-3xl border bg-white dark:bg-gray-950 p-6 shadow-xl shadow-gray-100/10 dark:shadow-black/20 flex flex-col md:flex-row items-center gap-8 ${getScoreGradeText(localMetrics.atsScore).border}`}>
-                
-                {/* Circular Score Gauge */}
-                <div className="relative flex items-center justify-center shrink-0">
-                  <svg className="w-36 h-36 transform -rotate-90">
-                    <circle cx="72" cy="72" r="62" strokeWidth="10" stroke="#F3F4F6" className="dark:stroke-gray-850" fill="transparent" />
-                    <circle
-                      cx="72"
-                      cy="72"
-                      r="62"
-                      strokeWidth="10"
-                      stroke="url(#atsScoreGradient)"
-                      strokeDasharray={`${2 * Math.PI * 62}`}
-                      strokeDashoffset={`${2 * Math.PI * 62 * (1 - localMetrics.atsScore / 100)}`}
-                      strokeLinecap="round"
-                      fill="transparent"
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+                <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-xl shadow-gray-100/10 dark:border-gray-800 dark:bg-gray-950">
+                  <span className="text-xs font-bold uppercase tracking-widest text-teal-600">
+                    {scanType === 'general' ? 'General scan' : 'Target role scan'}
+                  </span>
+                  <div className="mt-3 flex items-end justify-between gap-4">
+                    <div>
+                      <h3 className="text-2xl font-black text-gray-950 dark:text-white">
+                        {scanType === 'general' ? 'ATS Score' : 'Match Score'}
+                      </h3>
+                      <p className="mt-1 max-w-xl text-sm text-gray-500 dark:text-gray-400">
+                        {scanType === 'general'
+                          ? 'Overall readiness for recruiter and ATS screening.'
+                          : 'Resume alignment with the supplied target role.'}
+                      </p>
+                    </div>
+                    <span className="text-5xl font-black text-gray-950 dark:text-white">
+                      {scanType === 'general' ? localMetrics.atsScore : localMetrics.matchScore}
+                    </span>
+                  </div>
+                  <div className="mt-5 h-2.5 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
+                    <div
+                      className={`h-full rounded-full ${getProgressColor(
+                        scanType === 'general' ? localMetrics.atsScore : localMetrics.matchScore || 0
+                      )}`}
+                      style={{ width: `${scanType === 'general' ? localMetrics.atsScore : localMetrics.matchScore || 0}%` }}
                     />
-                    <defs>
-                      <linearGradient id="atsScoreGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stopColor="#4f46e5" />
-                        <stop offset="100%" stopColor="#8b5cf6" />
-                      </linearGradient>
-                    </defs>
-                  </svg>
-                  <div className="absolute text-center">
-                    <span className="text-4xl font-black text-gray-950 dark:text-white leading-none">
-                      {localMetrics.atsScore}
-                    </span>
-                    <span className="text-[10px] text-gray-400 font-extrabold block tracking-wider uppercase mt-1">ATS Score</span>
                   </div>
                 </div>
 
-                {/* Score context */}
-                <div className="flex-1 text-center md:text-left">
-                  <div className="flex flex-wrap items-center justify-center md:justify-start gap-2.5 mb-2">
-                    <span className="bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 text-xs font-extrabold px-3 py-1 rounded-full border border-indigo-100 dark:border-indigo-900/30">
-                      Match Fit: {localMetrics.matchScore}%
-                    </span>
-                    <span className="bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 text-xs font-extrabold px-3 py-1 rounded-full border border-purple-100 dark:border-purple-900/30">
-                      Keywords Sync: {localMetrics.keywordCoverage}%
-                    </span>
-                  </div>
-                  <h3 className="text-2xl font-black text-gray-900 dark:text-white">
-                    {getScoreGradeText(localMetrics.atsScore).title}
+                <div className="rounded-3xl border border-gray-100 bg-white p-6 dark:border-gray-800 dark:bg-gray-950">
+                  <h3 className="text-xs font-bold uppercase tracking-widest text-gray-400">
+                    {scanType === 'general' ? 'Quick summary' : 'Resume vs target'}
                   </h3>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 max-w-lg leading-relaxed">
-                    {getScoreGradeText(localMetrics.atsScore).text}
-                  </p>
-                  <div className="mt-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                    Job Analysis Coordinate &bull; Compliant structure checklist
-                  </div>
+                  <dl className="mt-4 grid grid-cols-2 gap-4 text-sm">
+                    <div><dt className="text-gray-400">General ATS</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.atsScore}%</dd></div>
+                    <div><dt className="text-gray-400">Skills</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.skillAnalysis.coveragePercent}%</dd></div>
+                    <div><dt className="text-gray-400">Projects</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.projectAnalysis.qualityScore}%</dd></div>
+                    <div><dt className="text-gray-400">Warnings</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.warnings.length}</dd></div>
+                  </dl>
                 </div>
               </div>
 
-              {/* CLASSIFIED CATEGORY CRITERIAS BREAKDOWN */}
+              <div className="rounded-3xl border border-cyan-200 bg-cyan-50/40 p-6 dark:border-cyan-900/40 dark:bg-cyan-950/10">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-black text-gray-900 dark:text-white">Page fit</h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Full-resume density is evaluated independently from ATS readiness and target matching.
+                    </p>
+                  </div>
+                  <span className="text-xs font-bold text-cyan-700 dark:text-cyan-300">
+                    {localMetrics.pageFitDetails.fitCategory === 'multi-page likely'
+                      ? 'Multi Page expected'
+                      : localMetrics.pageFitDetails.fitCategory === 'near limit'
+                        ? 'Single Page at risk'
+                        : 'Single Page expected'}
+                  </span>
+                </div>
+                <dl className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+                  {[
+                    ['Page-fit score', `${localMetrics.pageFitDetails.score}%`],
+                    ['Estimated pages', localMetrics.pageFitDetails.estimatedPages],
+                    ['Fit category', localMetrics.pageFitDetails.fitCategory],
+                    ['Overflow risk', localMetrics.pageFitDetails.overflowRisk],
+                  ].map(([label, value]) => (
+                    <div key={String(label)} className="rounded-xl border border-cyan-100 bg-white/80 p-3 dark:border-cyan-900/30 dark:bg-gray-950/70">
+                      <dt className="text-[10px] font-bold uppercase tracking-wide text-gray-400">{label}</dt>
+                      <dd className="mt-1 text-sm font-black capitalize text-gray-900 dark:text-white">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+
               <div className="rounded-3xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950 p-6 shadow-xl shadow-gray-100/10 dark:shadow-black/20">
-                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-6">Local ATS Criteria Breakdown</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  
-                  {/* Keywords (40%) */}
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between text-xs font-extrabold">
-                      <span className="text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
-                        <TrendingUp className="w-4 h-4 text-indigo-500" />
-                        <span>Keyword Match Density (40%)</span>
-                      </span>
-                      <span className="text-gray-900 dark:text-white">{localMetrics.breakdown.keyword}%</span>
+                <h3 className="text-xs font-bold uppercase tracking-widest text-gray-400">ATS readiness breakdown</h3>
+                <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ['Parsing / structure', localMetrics.breakdown.parsing],
+                    ['Contact visibility', localMetrics.breakdown.contact],
+                    ['Section completeness', localMetrics.breakdown.completeness],
+                    ['Skills coverage', localMetrics.breakdown.skills],
+                    ['Experience strength', localMetrics.breakdown.experience],
+                    ['Project quality', localMetrics.breakdown.projects],
+                    ['Readability', localMetrics.breakdown.readability],
+                  ].map(([label, value]) => (
+                    <div key={String(label)} className="rounded-xl bg-gray-50 p-3 dark:bg-gray-900">
+                      <span className="block text-[10px] font-bold uppercase tracking-wide text-gray-400">{label}</span>
+                      <span className="mt-1 block text-xl font-black text-gray-900 dark:text-white">{value}%</span>
                     </div>
-                    <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
-                      <div className={`h-full ${getProgressColor(localMetrics.breakdown.keyword)} rounded-full`} style={{ width: `${localMetrics.breakdown.keyword}%` }} />
-                    </div>
-                  </div>
+                  ))}
+                </div>
+              </div>
 
-                  {/* Skills (25%) */}
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between text-xs font-extrabold">
-                      <span className="text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
-                        <Award className="w-4 h-4 text-purple-500" />
-                        <span>Technical Skills Overlap (25%)</span>
-                      </span>
-                      <span className="text-gray-900 dark:text-white">{localMetrics.breakdown.skills}%</span>
+              <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-xl shadow-gray-100/10 dark:border-gray-800 dark:bg-gray-950">
+                <div>
+                  <h3 className="text-sm font-black text-gray-900 dark:text-white">Analysis modules</h3>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Independent evidence modules are validated first, then consolidated into the headline score.
+                  </p>
+                </div>
+                <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {localMetrics.analysisModules.map(module => (
+                    <div key={module.id} className="rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <span className="text-xs font-black text-gray-900 dark:text-white">{module.label}</span>
+                          <p className="mt-1 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{module.evidence}</p>
+                        </div>
+                        <span className={`rounded px-2 py-1 text-[9px] font-bold uppercase tracking-wide ${
+                          module.status === 'passed'
+                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'
+                            : 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
+                        }`}>
+                          {module.score}%
+                        </span>
+                      </div>
                     </div>
-                    <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
-                      <div className={`h-full ${getProgressColor(localMetrics.breakdown.skills)} rounded-full`} style={{ width: `${localMetrics.breakdown.skills}%` }} />
-                    </div>
-                  </div>
+                  ))}
+                </div>
+              </div>
 
-                  {/* Experience (20%) */}
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between text-xs font-extrabold">
-                      <span className="text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
-                        <Briefcase className="w-4 h-4 text-emerald-500" />
-                        <span>Experience, Verbs & Impact (20%)</span>
-                      </span>
-                      <span className="text-gray-900 dark:text-white">{localMetrics.breakdown.experience}%</span>
+              {scanType === 'targeted' && localMetrics.targetComparison && (
+                <div className="rounded-3xl border border-teal-200 bg-teal-50/40 p-6 dark:border-teal-900/40 dark:bg-teal-950/10">
+                  <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-black text-gray-900 dark:text-white">Resume vs Target</h3>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Live evidence comparison against the supplied job description.</p>
+                      <p className="mt-1 text-[11px] font-semibold text-teal-700 dark:text-teal-300">
+                        Detected role family: {localMetrics.targetComparison.roleFamilyLabel}
+                      </p>
                     </div>
-                    <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
-                      <div className={`h-full ${getProgressColor(localMetrics.breakdown.experience)} rounded-full`} style={{ width: `${localMetrics.breakdown.experience}%` }} />
-                    </div>
+                    <span className="text-xs font-bold text-teal-700 dark:text-teal-300">
+                      {localMetrics.matchScore}% aligned
+                    </span>
                   </div>
-
-                  {/* Education (15%) */}
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between text-xs font-extrabold">
-                      <span className="text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
-                        <BookOpen className="w-4 h-4 text-amber-500" />
-                        <span>Educational Degree Fit (15%)</span>
+                  <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-5">
+                    {[
+                      ['Keywords', localMetrics.targetComparison.keywordOverlap],
+                      ['Skills', localMetrics.targetComparison.skillAlignment],
+                      ['Role', localMetrics.targetComparison.roleRelevance],
+                      ['Experience', localMetrics.targetComparison.experienceEvidence],
+                      ['Projects', localMetrics.targetComparison.projectEvidence],
+                    ].map(([label, value]) => (
+                      <div key={String(label)} className="rounded-xl border border-teal-100 bg-white/80 p-3 dark:border-teal-900/30 dark:bg-gray-950/70">
+                        <span className="block text-[10px] font-bold uppercase tracking-wide text-gray-400">{label}</span>
+                        <span className="mt-1 block text-lg font-black text-gray-900 dark:text-white">{value}%</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div className="rounded-xl border border-emerald-200 bg-white/80 p-4 dark:border-emerald-900/40 dark:bg-gray-950/70">
+                      <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                        Strongly supported
                       </span>
-                      <span className="text-gray-900 dark:text-white">{localMetrics.breakdown.education}%</span>
+                      {localMetrics.targetComparison.strongEvidence.length > 0 ? (
+                        <ul className="mt-2 space-y-1 text-[11px] text-gray-700 dark:text-gray-300">
+                          {localMetrics.targetComparison.strongEvidence.slice(0, 5).map(evidence => (
+                            <li key={evidence}>{evidence}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-2 text-[11px] text-gray-500">No target terms have strong experience or project evidence yet.</p>
+                      )}
                     </div>
-                    <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
-                      <div className={`h-full ${getProgressColor(localMetrics.breakdown.education)} rounded-full`} style={{ width: `${localMetrics.breakdown.education}%` }} />
+                    <div className="rounded-xl border border-amber-200 bg-white/80 p-4 dark:border-amber-900/40 dark:bg-gray-950/70">
+                      <span className="text-[10px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+                        Weakly supported
+                      </span>
+                      {localMetrics.targetComparison.weakEvidence.length > 0 ? (
+                        <ul className="mt-2 space-y-1 text-[11px] text-gray-700 dark:text-gray-300">
+                          {localMetrics.targetComparison.weakEvidence.slice(0, 5).map(evidence => (
+                            <li key={evidence}>{evidence}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-2 text-[11px] text-gray-500">No skills-only or low-context matches were detected.</p>
+                      )}
                     </div>
                   </div>
                 </div>
+              )}
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="rounded-3xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950 p-6">
+                  <h3 className="text-xs font-extrabold text-cyan-600 uppercase tracking-widest">Skill analysis</h3>
+                  <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                    <div><dt className="text-gray-400">{scanType === 'targeted' ? 'JD coverage' : 'Coverage'}</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.skillAnalysis.coveragePercent}%</dd></div>
+                    <div><dt className="text-gray-400">Diversity</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.skillAnalysis.diversityScore}%</dd></div>
+                    <div><dt className="text-gray-400">Template placement</dt><dd className="font-black capitalize text-gray-900 dark:text-white">{localMetrics.skillAnalysis.placement}</dd></div>
+                    <div><dt className="text-gray-400">Visible</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.skillAnalysis.visible ? 'Yes' : 'No'}</dd></div>
+                  </dl>
+                </div>
+                <div className="rounded-3xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950 p-6">
+                  <h3 className="text-xs font-extrabold text-emerald-600 uppercase tracking-widest">Project analysis</h3>
+                  <dl className="mt-4 grid grid-cols-3 gap-3 text-xs">
+                    <div><dt className="text-gray-400">With links</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.projectAnalysis.hasLinks}</dd></div>
+                    <div><dt className="text-gray-400">Metrics</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.projectAnalysis.hasMetrics}</dd></div>
+                    <div><dt className="text-gray-400">Quality</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.projectAnalysis.qualityScore}%</dd></div>
+                  </dl>
+                </div>
+                <div className="rounded-3xl border border-amber-200 bg-amber-50/40 p-6 dark:border-amber-900/40 dark:bg-amber-950/10">
+                  <h3 className="text-xs font-extrabold text-amber-700 uppercase tracking-widest">Warnings</h3>
+                  {localMetrics.warnings.length > 0 ? (
+                    <ul className="mt-3 space-y-1.5 text-[11px] leading-4 text-amber-900 dark:text-amber-200">
+                      {localMetrics.warnings.map(warning => <li key={warning}>{warning}</li>)}
+                    </ul>
+                  ) : (
+                    <p className="mt-3 text-xs text-gray-500">No structural warnings detected.</p>
+                  )}
+                </div>
               </div>
+
+              {localMetrics.missingItems.length > 0 && (
+                <div className="rounded-3xl border border-amber-200 bg-amber-50/40 p-6 dark:border-amber-900/40 dark:bg-amber-950/10">
+                  <h3 className="text-xs font-extrabold uppercase tracking-widest text-amber-700">Missing items</h3>
+                  <ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                    {localMetrics.missingItems.map(item => (
+                      <li key={item} className="text-xs leading-relaxed text-amber-900 dark:text-amber-200">{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {/* LOCAL MATCH DETAIL PANELS (Skills & Keywords) */}
+              {scanType === 'targeted' && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 
                 {/* SKILLS PANEL */}
                 <div className="rounded-3xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950 p-6 shadow-xl">
                   <h3 className="text-xs font-extrabold text-indigo-500 uppercase tracking-widest mb-4 flex items-center gap-2">
                     <Award className="w-4 h-4" />
-                    <span>Technical Skills Coverage</span>
+                    <span>{scanType === 'general' ? 'Skills Coverage & Evidence' : 'Technical Skills Coverage'}</span>
                   </h3>
+                  <div className="mb-4 grid grid-cols-3 gap-2">
+                    {[
+                      ['JD coverage', localMetrics.skillAnalysis.coveragePercent],
+                      ['Diversity', localMetrics.skillAnalysis.diversityScore],
+                      ['Project quality', localMetrics.projectAnalysis.qualityScore],
+                    ].map(([label, value]) => (
+                      <div key={String(label)} className="rounded-lg bg-gray-50 p-2 text-center dark:bg-gray-900">
+                        <span className="block text-[9px] font-bold uppercase tracking-wide text-gray-400">{label}</span>
+                        <span className="text-sm font-black text-gray-900 dark:text-white">{value}%</span>
+                      </div>
+                    ))}
+                  </div>
                   
-                  {aiReport.missingSkills && aiReport.missingSkills.length > 0 ? (
+                  {localMetrics.targetComparison && localMetrics.targetComparison.missingCriticalSkills.length > 0 ? (
                     <div className="space-y-4">
                       <div>
                         <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Missing Skills List</div>
                         <div className="flex flex-wrap gap-1.5">
-                          {aiReport.missingSkills.slice(0, 15).map((sk: string, idx: number) => (
+                          {localMetrics.targetComparison.missingCriticalSkills.slice(0, 15).map((sk: string, idx: number) => (
                             <span key={idx} className="bg-rose-50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/35 text-rose-600 dark:text-rose-450 text-[10px] font-extrabold px-2.5 py-1 rounded">
                               {sk}
                             </span>
@@ -1189,15 +1414,46 @@ export default function ATSAnalyzer({
                 <div className="rounded-3xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950 p-6 shadow-xl">
                   <h3 className="text-xs font-extrabold text-indigo-500 uppercase tracking-widest mb-4 flex items-center gap-2">
                     <TrendingUp className="w-4 h-4" />
-                    <span>Positional Keyword Gaps</span>
+                    <span>{scanType === 'general' ? 'Evidence Ledger' : 'Positional Keyword Gaps'}</span>
                   </h3>
+                  {[...localMetrics.keywordGaps.strongCoverage, ...localMetrics.keywordGaps.weakCoverage].length > 0 && (
+                    <div className="mb-4 space-y-1.5">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                        {scanType === 'general' ? 'Detected evidence by section' : 'Highest-priority evidence'}
+                      </div>
+                      {[
+                        ...localMetrics.keywordGaps.strongCoverage.map(keyword => ({ keyword, weight: 'Strong', matchType: 'coverage' })),
+                        ...localMetrics.keywordGaps.weakCoverage.map(keyword => ({ keyword, weight: 'Weak', matchType: 'coverage' })),
+                      ].slice(0, 6).map(keyword => (
+                        <div key={keyword.keyword} className="flex items-center justify-between gap-3 text-[11px]">
+                          <span className="font-semibold text-emerald-700">
+                            {keyword.keyword}
+                          </span>
+                          <span className="text-gray-400">
+                            Weight {keyword.weight} · {keyword.matchType}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
-                  {aiReport.missingKeywords && aiReport.missingKeywords.length > 0 ? (
+                  {localMetrics.targetComparison && localMetrics.targetComparison.positionalKeywords.length > 0 && (
+                    <div className="mb-4">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Positional keywords</div>
+                      <ul className="mt-2 space-y-1 text-[11px] text-gray-600 dark:text-gray-400">
+                        {localMetrics.targetComparison.positionalKeywords.slice(0, 8).map(keyword => (
+                          <li key={keyword}>{keyword}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {localMetrics.keywordGaps.missing.length > 0 ? (
                     <div className="space-y-4">
                       <div>
                         <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Missing POSITIONAL Keywords</div>
                         <div className="flex flex-wrap gap-1.5">
-                          {aiReport.missingKeywords.slice(0, 15).map((kw: string, idx: number) => (
+                          {localMetrics.keywordGaps.missing.slice(0, 15).map((kw: string, idx: number) => (
                             <span key={idx} className="bg-amber-50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/35 text-amber-600 dark:text-amber-450 text-[10px] font-extrabold px-2.5 py-1 rounded">
                               {kw}
                             </span>
@@ -1206,22 +1462,27 @@ export default function ATSAnalyzer({
                       </div>
                     </div>
                   ) : (
-                    <p className="text-xs text-gray-400 italic">Excellent! Key terms found complete overlap in resume texts.</p>
+                    <p className="text-xs text-gray-400 italic">
+                      {scanType === 'general'
+                        ? 'No unsupported critical evidence gaps were detected.'
+                        : 'Key terms have complete overlap with the resume evidence.'}
+                    </p>
                   )}
                 </div>
               </div>
+              )}
 
-              {/* DEEP AI DIAGNOSTIC INSIGHTS (Strengths, Weaknesses, Recommendations) */}
+              {/* INFORMATIONAL EXPLANATIONS OF THE DETERMINISTIC RESULT */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 
                 {/* STRENGTHS */}
                 <div className="rounded-3xl border border-emerald-100 dark:border-emerald-950/20 bg-emerald-50/20 dark:bg-emerald-950/5 p-6 shadow-sm">
                   <h3 className="text-xs font-extrabold text-emerald-650 dark:text-emerald-400 uppercase tracking-widest mb-4 flex items-center gap-2">
                     <CheckCircle className="w-4.5 h-4.5 text-emerald-550" />
-                    <span>Resume Highlights & Strengths</span>
+                    <span>Strong keyword evidence</span>
                   </h3>
                   <ul className="space-y-3">
-                    {aiReport.strengths && aiReport.strengths.map((str: string, idx: number) => (
+                    {presentationReport.strengths.map((str: string, idx: number) => (
                       <li key={idx} className="flex gap-2 text-xs text-gray-700 dark:text-gray-300 leading-relaxed font-semibold">
                         <span className="text-emerald-500 font-bold shrink-0">&bull;</span>
                         <span>{str}</span>
@@ -1234,10 +1495,10 @@ export default function ATSAnalyzer({
                 <div className="rounded-3xl border border-rose-100 dark:border-rose-950/20 bg-rose-50/20 dark:bg-rose-950/5 p-6 shadow-sm">
                   <h3 className="text-xs font-extrabold text-rose-650 dark:text-rose-400 uppercase tracking-widest mb-4 flex items-center gap-2">
                     <AlertCircle className="w-4.5 h-4.5 text-rose-550" />
-                    <span>Compliance Risks & Gaps</span>
+                    <span>Warnings and gaps</span>
                   </h3>
                   <ul className="space-y-3">
-                    {aiReport.weaknesses && aiReport.weaknesses.map((wk: string, idx: number) => (
+                    {presentationReport.weaknesses.map((wk: string, idx: number) => (
                       <li key={idx} className="flex gap-2 text-xs text-gray-700 dark:text-gray-300 leading-relaxed font-semibold">
                         <span className="text-rose-500 font-bold shrink-0">&bull;</span>
                         <span>{wk}</span>
@@ -1254,7 +1515,7 @@ export default function ATSAnalyzer({
                   <span>Strategic Improvement Recommendations</span>
                 </h3>
                 <ul className="space-y-3 pl-1.5">
-                  {aiReport.recommendations && aiReport.recommendations.map((rec: string, idx: number) => (
+                  {presentationReport.recommendations.map((rec: string, idx: number) => (
                     <li key={idx} className="flex gap-3 text-xs text-gray-700 dark:text-gray-300 leading-relaxed">
                       <span className="w-5 h-5 bg-indigo-50 dark:bg-indigo-950 text-indigo-650 dark:text-indigo-450 rounded flex items-center justify-center font-bold text-[10px] shrink-0 mt-0.5">
                         {idx + 1}
@@ -1265,54 +1526,14 @@ export default function ATSAnalyzer({
                 </ul>
 
                 {/* EXPERT ADVICE STATEMENT */}
-                {aiReport.atsOptimizationAdvice && (
+                {presentationReport.atsOptimizationAdvice && (
                   <div className="mt-6 p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border border-gray-150 dark:border-gray-850 text-xs text-gray-600 dark:text-gray-400 italic leading-relaxed">
                     <Quote className="w-4.5 h-4.5 text-indigo-400 shrink-0 mb-1 inline mr-1" />
-                    {aiReport.atsOptimizationAdvice}
+                    {presentationReport.atsOptimizationAdvice}
                   </div>
                 )}
               </div>
 
-              {/* REWRITE SUGGESTIONS - BEFORE & AFTER SCREEN */}
-              {aiReport.rewriteRecommendations && aiReport.rewriteRecommendations.length > 0 ? (
-                <div className="rounded-3xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950 p-6 shadow-xl">
-                  <h3 className="text-xs font-bold text-gray-450 uppercase tracking-widest mb-4 flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-indigo-500" />
-                    <span>Real-time Rewrite Recommendations</span>
-                  </h3>
-                  <div className="space-y-5">
-                    {aiReport.rewriteRecommendations.map((rw: any, idx: number) => {
-                      return (
-                        <div key={idx} className="border border-gray-100 dark:border-gray-850 rounded-2xl overflow-hidden shadow-sm">
-                          <div className="grid grid-cols-1 md:grid-cols-2 text-xs">
-                            {/* Before panel */}
-                            <div className="p-4 bg-gray-50/70 dark:bg-gray-900/30 border-r border-gray-100 dark:border-gray-850">
-                              <span className="bg-rose-50 dark:bg-rose-950/20 text-rose-600 text-[9px] font-extrabold px-2 py-0.5 rounded uppercase tracking-wider block w-fit mb-2">Original phrasing</span>
-                              <p className="text-gray-500 line-through leading-relaxed">{rw.original || 'Original text'}</p>
-                            </div>
-                            {/* After panel */}
-                            <div className="p-4 bg-white dark:bg-gray-950">
-                              <span className="bg-emerald-50 dark:bg-emerald-950/20 text-emerald-600 text-[9px] font-extrabold px-2 py-0.5 rounded uppercase tracking-wider block w-fit mb-2">ATS optimized wording</span>
-                              <p className="text-gray-800 dark:text-gray-200 font-bold leading-relaxed">{rw.optimized || 'Improved text'}</p>
-                            </div>
-                          </div>
-                          {rw.explanation && (
-                            <div className="px-4 py-2 bg-indigo-50/30 dark:bg-indigo-950/20 border-t border-gray-100 dark:border-gray-850">
-                              <p className="text-[10px] text-zinc-500 italic">
-                                <strong>Rationale:</strong> {rw.explanation}
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : (
-                <div className="rounded-3xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950 p-8 text-center shadow-xl">
-                  <p className="text-sm text-gray-500 italic font-medium">No significant ATS improvement needed.</p>
-                </div>
-              )}
             </div>
           )}
         </div>

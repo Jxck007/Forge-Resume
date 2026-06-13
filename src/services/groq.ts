@@ -101,8 +101,11 @@ CRITICAL INTEGRITY RULES — NEVER VIOLATE THESE:
 4. Keep all recommendations concise, specific, human-readable, and ATS-compliant.
 5. Rewrite recommendations must be based solely on the candidate's actual existing bullet points — do NOT fabricate new metrics or accomplishments.
 6. If no rewrite is genuinely needed, return an empty rewriteRecommendations array.
+7. The deterministic ATS score and category scores are final. Never recalculate, replace, round, or propose a different score.
+8. Treat missingKeywords and missingSkills in METRICS as authoritative deterministic findings.
+9. Each original and optimized rewrite must be no more than 2 short lines.
 
-Your task: Compare the candidate's resume against the provided job description. Identify genuine strengths, real gaps, and actionable (non-fabricating) improvements.
+Your task: Explain the supplied deterministic scoring evidence. Identify genuine strengths, real gaps, and actionable non-fabricating improvements.
 
 Required JSON format (no markdown):
 {
@@ -127,6 +130,9 @@ Required JSON format (no markdown):
     summary: parsedResume.summary,
     skills: parsedResume.skills,
     experience: parsedResume.experience.map(e => ({ title: e.title, desc: e.description })),
+    internships: parsedResume.internships.map(e => ({ title: e.role, desc: e.description })),
+    projects: parsedResume.projects.map(e => ({ name: e.name, technologies: e.technologies, desc: e.description })),
+    education: parsedResume.education.map(e => ({ degree: e.degree, institution: e.institution })),
   };
 
   const userPrompt = `
@@ -138,7 +144,19 @@ Required JSON format (no markdown):
   const rawJson = await callAIUnified(settings, systemPrompt, userPrompt, true);
   try {
     const cleaned = cleanJsonOutput(rawJson);
-    return JSON.parse(cleaned) as GroqDeepAtsResponse;
+    const parsed = JSON.parse(cleaned) as GroqDeepAtsResponse;
+    const limitRewrite = (value: unknown) =>
+      String(value || '').split(/\r?\n/).slice(0, 2).join(' ').trim();
+    return {
+      ...parsed,
+      missingKeywords: localMetrics.missingKeywords || [],
+      missingSkills: localMetrics.missingSkills || [],
+      rewriteRecommendations: (parsed.rewriteRecommendations || []).slice(0, 4).map(rewrite => ({
+        original: limitRewrite(rewrite.original),
+        optimized: limitRewrite(rewrite.optimized),
+        explanation: limitRewrite(rewrite.explanation),
+      })).filter(rewrite => rewrite.original && rewrite.optimized),
+    };
   } catch (err) {
     console.error('Failed parsing Deep ATS JSON response:', err);
     return {
@@ -157,6 +175,13 @@ Required JSON format (no markdown):
 export async function aiParseResume(settings: UserSettings, rawText: string): Promise<Partial<ResumeData>> {
   const systemPrompt = `You are a strict resume parser. Extract only information present in the source text.
 
+NON-NEGOTIABLE DATA RULES:
+- Never invent, infer, complete, or improve a value.
+- Never emit placeholders, examples, generic names, or guessed dates.
+- Preserve names, employers, project names, skills, dates, and scores exactly as written.
+- When evidence is missing or ambiguous, return an empty string or empty array.
+- The same source text must produce the same structured result.
+
 Return one JSON object using this exact schema. Every collection field MUST be a JSON array, even when it has zero or one item:
 {
   "title": "",
@@ -172,7 +197,7 @@ Return one JSON object using this exact schema. Every collection field MUST be a
   },
   "summary": "",
   "education": [
-    { "degree": "", "institution": "", "location": "", "startDate": "", "endDate": "", "gpa": "", "description": "" }
+    { "degree": "", "institution": "", "location": "", "startDate": "", "endDate": "", "scoreType": "", "gpa": "", "description": "" }
   ],
   "experience": [
     { "title": "", "company": "", "location": "", "startDate": "", "endDate": "", "description": "" }
@@ -196,9 +221,15 @@ Return one JSON object using this exact schema. Every collection field MUST be a
   "achievements": [],
   "volunteering": [],
   "languages": []
-}`;
+}
+
+Education score rules:
+- Keep the score value exactly as written in the "gpa" field.
+- Use scoreType "percentage" for SSLC, 10th, secondary school, high school, HSC, 12th, and higher secondary.
+- Use scoreType "cgpa" for diploma, bachelor's, master's, and PhD unless the source explicitly says GPA.
+- Explicit GPA, CGPA, percentage, percent, or % wording always takes priority.`;
   const userPrompt = `Parse this resume text into the required JSON schema:\n\n${rawText.substring(0, 10000)}`;
-  const rawJson = await callAIUnified(settings, systemPrompt, userPrompt, true);
+  const rawJson = await callAIUnified({ ...settings, temperature: 0 }, systemPrompt, userPrompt, true);
   try {
     const parsed = JSON.parse(cleanJsonOutput(rawJson));
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -227,6 +258,10 @@ STRICT COMPLIANCE RULES:
 6. Achievements should be a flat string array — each achievement one entry.
 7. Languages spoken should be a flat string array (e.g., ["English (Fluent)", "French (Intermediate)"]).
 
+8. Never emit placeholders, examples, generic company/project names, or guessed dates.
+9. Preserve names, employers, project names, skills, dates, and scores exactly as written.
+10. The same source text must produce the same structured result.
+
 Required JSON format (no markdown, strict JSON only):
 {
   "personalDetails": {
@@ -248,7 +283,7 @@ Required JSON format (no markdown, strict JSON only):
     { "role": "", "company": "", "location": "", "startDate": "", "endDate": "", "description": "", "technologiesUsed": "" }
   ],
   "education": [
-    { "degree": "", "institution": "", "location": "", "startDate": "", "endDate": "", "gpa": "", "description": "" }
+    { "degree": "", "institution": "", "location": "", "startDate": "", "endDate": "", "scoreType": "", "gpa": "", "description": "" }
   ],
   "projects": [
     { "name": "", "description": "", "technologies": "", "github": "", "live": "" }
@@ -266,10 +301,16 @@ Required JSON format (no markdown, strict JSON only):
   "achievements": [],
   "languages": [],
   "volunteering": []
-}`;
+}
+
+Education score rules:
+- Keep the score value exactly as written in the "gpa" field.
+- Use scoreType "percentage" for school and higher-secondary education.
+- Use scoreType "cgpa" for college/university unless GPA is explicitly identified.
+- Explicit GPA, CGPA, percentage, percent, or % wording always takes priority.`;
 
   const userPrompt = `Resume Text to Parse:\n\n${rawText.substring(0, 8000)}`;
-  const rawJson = await callAIUnified(settings, systemPrompt, userPrompt, true);
+  const rawJson = await callAIUnified({ ...settings, temperature: 0 }, systemPrompt, userPrompt, true);
   try {
     const cleaned = cleanJsonOutput(rawJson);
     return JSON.parse(cleaned) as Partial<ProfileData>;

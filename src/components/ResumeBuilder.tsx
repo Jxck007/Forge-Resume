@@ -28,6 +28,12 @@ import {
 } from 'lucide-react';
 import { aiImproveSummary, aiImproveExperience, aiImproveProject } from '../services/groq';
 import ConfirmationDialog from './ConfirmationDialog';
+import {
+  EDUCATION_SCORE_TYPES,
+  getEducationScoreFieldLabel,
+  getEducationScorePlaceholder,
+  getEducationScoreType,
+} from '../utils/educationScore';
 
 interface ResumeBuilderProps {
   resume: ResumeData;
@@ -37,7 +43,7 @@ interface ResumeBuilderProps {
   showToasts: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
-export default function ResumeBuilder({
+function ResumeBuilder({
   resume,
   onChange,
   settings,
@@ -122,7 +128,7 @@ export default function ResumeBuilder({
     order[index] = order[targetIndex];
     order[targetIndex] = temp;
 
-    onChange({ ...resume, sectionOrder: order });
+    onChange({ ...resume, sectionOrder: order, sectionOrderMode: 'custom' });
     showToasts('Section sequence updated.', 'info');
   };
 
@@ -291,6 +297,7 @@ export default function ResumeBuilder({
       startDate: '',
       endDate: '',
       gpa: '',
+      scoreType: undefined,
       description: '',
     };
     onChange({
@@ -324,6 +331,8 @@ export default function ResumeBuilder({
       name: '',
       description: '',
       technologies: '',
+      startDate: '',
+      endDate: '',
       github: '',
       live: '',
     };
@@ -744,6 +753,45 @@ export default function ResumeBuilder({
               />
             </div>
           </div>
+        )}
+      </div>
+
+      <div className="rounded-2xl border border-[#2A2E37] bg-[#171A21] p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-white">Section Ordering</h3>
+            <p className="mt-1 text-[11px] leading-4 text-zinc-400">
+              Template order follows the selected design. Custom order follows the section arrows below.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-1 rounded-lg border border-[#2A2E37] bg-[#0F1115] p-1">
+            {([
+              ['template', 'Template Default'],
+              ['custom', 'Custom Order'],
+            ] as const).map(([mode, label]) => {
+              const activeMode = resume.sectionOrderMode || 'custom';
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => onChange({ ...resume, sectionOrderMode: mode })}
+                  aria-pressed={activeMode === mode}
+                  className={`min-h-9 rounded-md px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide transition ${
+                    activeMode === mode
+                      ? 'bg-[#72DFCA] text-[#08110F]'
+                      : 'text-zinc-300 hover:bg-[#1B2028] hover:text-white'
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {(resume.sectionOrderMode || 'custom') === 'template' && (
+          <p className="mt-3 rounded-lg border border-[#31413F] bg-[#10201E] px-3 py-2 text-[11px] text-[#A7E9DC]">
+            Move any section to switch automatically to Custom Order.
+          </p>
         )}
       </div>
 
@@ -1277,12 +1325,24 @@ export default function ResumeBuilder({
                           </div>
                         </div>
                         <div>
-                          <label className="block text-[10px] font-bold text-zinc-400 mb-1">GPA / CGPA (Optional)</label>
+                          <label className="block text-[10px] font-bold text-zinc-400 mb-1">Score Type</label>
+                          <select
+                            value={getEducationScoreType(edu)}
+                            onChange={v => updateEducation(edu.id, 'scoreType', v.target.value)}
+                            className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-white text-xs outline-none"
+                          >
+                            {EDUCATION_SCORE_TYPES.map(option => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-zinc-400 mb-1">{getEducationScoreFieldLabel(edu)}</label>
                           <input
                             type="text"
                             value={edu.gpa}
                             onChange={v => updateEducation(edu.id, 'gpa', v.target.value)}
-                            placeholder="e.g., 3.84/4.0"
+                            placeholder={getEducationScorePlaceholder(edu)}
                             className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-white text-xs outline-none"
                           />
                         </div>
@@ -1434,6 +1494,26 @@ export default function ResumeBuilder({
                             value={proj.name}
                             onChange={v => updateProject(proj.id, 'name', v.target.value)}
                             placeholder="e.g., Real-time Chat Workspace"
+                            className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-white text-xs outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-zinc-400 mb-1">Start Date</label>
+                          <input
+                            type="text"
+                            value={proj.startDate || ''}
+                            onChange={v => updateProject(proj.id, 'startDate', v.target.value)}
+                            placeholder="Jan 2025"
+                            className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-white text-xs outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-zinc-400 mb-1">End Date</label>
+                          <input
+                            type="text"
+                            value={proj.endDate || ''}
+                            onChange={v => updateProject(proj.id, 'endDate', v.target.value)}
+                            placeholder="Present"
                             className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-white text-xs outline-none"
                           />
                         </div>
@@ -1962,3 +2042,31 @@ export default function ResumeBuilder({
     </div>
   );
 }
+
+const hasSameEditorData = (previous: ResumeData, next: ResumeData) =>
+  previous === next || (
+    previous.id === next.id &&
+    previous.title === next.title &&
+    previous.personalDetails === next.personalDetails &&
+    previous.summary === next.summary &&
+    previous.education === next.education &&
+    previous.experience === next.experience &&
+    previous.internships === next.internships &&
+    previous.projects === next.projects &&
+    previous.skills === next.skills &&
+    previous.certifications === next.certifications &&
+    previous.achievements === next.achievements &&
+    previous.volunteering === next.volunteering &&
+    previous.languages === next.languages &&
+    previous.customSections === next.customSections &&
+    previous.sectionOrder === next.sectionOrder &&
+    previous.sectionOrderMode === next.sectionOrderMode &&
+    previous.hiddenSections === next.hiddenSections &&
+    previous.isArchived === next.isArchived
+  );
+
+export default React.memo(ResumeBuilder, (previous, next) =>
+  hasSameEditorData(previous.resume, next.resume) &&
+  previous.settings === next.settings &&
+  previous.saving === next.saving
+);

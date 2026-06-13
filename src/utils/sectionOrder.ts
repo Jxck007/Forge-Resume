@@ -1,4 +1,5 @@
-import { ResumeData } from '../types';
+import { ResumeData, TemplateId } from '../types';
+import { formatEducationScore } from './educationScore';
 
 export const DEFAULT_SECTION_ORDER = [
   'summary',
@@ -12,6 +13,21 @@ export const DEFAULT_SECTION_ORDER = [
   'volunteering',
   'languages',
 ] as const;
+
+export const TEMPLATE_SECTION_PRIORITIES: Record<TemplateId, readonly string[]> = {
+  modern: ['summary', 'experience', 'skills', 'projects'],
+  minimal: ['summary', 'experience', 'education', 'skills'],
+  corporate: ['summary', 'experience', 'education', 'skills', 'certifications'],
+  executive: ['summary', 'experience', 'achievements', 'education', 'certifications'],
+  creative: ['projects', 'summary', 'experience', 'skills', 'achievements'],
+  atsFriendly: ['summary', 'skills', 'experience', 'projects', 'education'],
+  softwareEngineer: ['skills', 'projects', 'experience', 'education', 'certifications'],
+  student: ['education', 'projects', 'skills', 'internships', 'summary', 'experience'],
+  startup: ['projects', 'experience', 'skills', 'education', 'achievements', 'summary'],
+  designer: ['projects', 'summary', 'experience', 'skills', 'education'],
+  dataAnalyst: ['summary', 'skills', 'projects', 'experience', 'education'],
+  classic: ['summary', 'experience', 'education', 'projects', 'certifications'],
+};
 
 export function normalizeSectionOrder(
   sectionOrder: unknown,
@@ -33,13 +49,28 @@ export function normalizeSectionOrder(
   return normalizedOrder;
 }
 
-export function serializeResumeBySectionOrder(resume: ResumeData): string {
-  const hiddenSections = new Set(resume.hiddenSections);
-  const customSections = new Map(resume.customSections.map(section => [section.id, section]));
-  const sectionOrder = normalizeSectionOrder(
+export function resolveResumeSectionOrder(
+  resume: Pick<ResumeData, 'sectionOrder' | 'sectionOrderMode' | 'customSections' | 'templateId'>,
+  templateId: TemplateId = resume.templateId
+): string[] {
+  const normalizedOrder = normalizeSectionOrder(
     resume.sectionOrder,
     resume.customSections.map(section => section.id)
   );
+  if (resume.sectionOrderMode !== 'template') return normalizedOrder;
+
+  const priority = TEMPLATE_SECTION_PRIORITIES[templateId];
+  const prioritized = priority.filter(sectionId => normalizedOrder.includes(sectionId));
+  return [
+    ...prioritized,
+    ...normalizedOrder.filter(sectionId => !prioritized.includes(sectionId)),
+  ];
+}
+
+export function serializeResumeBySectionOrder(resume: ResumeData): string {
+  const hiddenSections = new Set(resume.hiddenSections);
+  const customSections = new Map(resume.customSections.map(section => [section.id, section]));
+  const sectionOrder = resolveResumeSectionOrder(resume);
 
   const sections = sectionOrder.flatMap(sectionId => {
     if (hiddenSections.has(sectionId)) return [];
@@ -70,23 +101,45 @@ export function serializeResumeBySectionOrder(resume: ResumeData): string {
       case 'education':
         return resume.education.length > 0
           ? [`Education:\n${resume.education.map(entry =>
-              `${entry.degree} at ${entry.institution} | ${entry.startDate} - ${entry.endDate}`
+              `${entry.degree} at ${entry.institution} | ${entry.startDate} - ${entry.endDate}${entry.gpa ? ` | ${formatEducationScore(entry)}` : ''}`
             ).join('\n')}`]
           : [];
       case 'skills': {
-        const skillValues = Object.values(resume.skills).flat();
-        return skillValues.length > 0 ? [`Skills:\n${skillValues.join(', ')}`] : [];
+        const categories = [
+          ['Programming Languages', resume.skills.programmingLanguages],
+          ['Frameworks & Libraries', resume.skills.frameworks],
+          ['Databases', resume.skills.databases],
+          ['Tools', resume.skills.tools],
+          ['Soft Skills', resume.skills.softSkills],
+        ].filter(([, values]) => (values as string[]).length > 0);
+        return categories.length > 0
+          ? [`Skills:\n${categories.map(([label, values]) =>
+              `${label}:\n${(values as string[]).join('\n')}`
+            ).join('\n\n')}`]
+          : [];
       }
       case 'projects':
         return resume.projects.length > 0
           ? [`Projects:\n${resume.projects.map(project =>
-              `${project.name} | ${project.technologies}\n${project.description}`
+              [
+                project.name,
+                project.technologies ? `Technologies: ${project.technologies}` : '',
+                [project.startDate, project.endDate].filter(Boolean).join(' - '),
+                project.description,
+                project.github ? `GitHub: ${project.github}` : '',
+                project.live ? `Live Demo: ${project.live}` : '',
+              ].filter(Boolean).join('\n')
             ).join('\n')}`]
           : [];
       case 'certifications':
         return resume.certifications.length > 0
           ? [`Certifications:\n${resume.certifications.map(entry =>
-              `${entry.name} | ${entry.issuer} | ${entry.date}`
+              [
+                entry.name,
+                entry.issuer,
+                entry.date,
+                entry.url ? `Credential Link: ${entry.url}` : '',
+              ].filter(Boolean).join('\n')
             ).join('\n')}`]
           : [];
       case 'achievements':

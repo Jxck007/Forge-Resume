@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ExternalLink,
   FileText,
+  Github,
   HelpCircle,
   KeyRound,
   Loader2,
@@ -436,6 +437,21 @@ export default function Settings({ user, showToasts, onKeyConfigured, onNavigate
               <div className="forge-note">
                 <HelpCircle />
                 <div><strong>Before exporting</strong><p>Check contact links, page breaks, date consistency, and the final filename.</p></div>
+              </div>
+              <div className="forge-note forge-creator-credit">
+                <Github />
+                <div>
+                  <strong>Built by Jegadeesh</strong>
+                  <p>Forge Resume is an independent ATS-focused resume platform.</p>
+                  <div className="forge-creator-links">
+                    <a href="https://github.com/Jxck007/portfolio" target="_blank" rel="noreferrer">
+                      Portfolio <ExternalLink />
+                    </a>
+                    <a href="https://github.com/Jxck007" target="_blank" rel="noreferrer">
+                      GitHub <ExternalLink />
+                    </a>
+                  </div>
+                </div>
               </div>
             </div>
           )}

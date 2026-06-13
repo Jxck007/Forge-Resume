@@ -17,6 +17,19 @@ import {
 } from '../types';
 import ImageCropperModal from './ImageCropperModal';
 import {
+  EDUCATION_SCORE_TYPES,
+  formatEducationScore,
+  getEducationScoreFieldLabel,
+  getEducationScorePlaceholder,
+  getEducationScoreType,
+  normalizeEducationScore,
+} from '../utils/educationScore';
+import {
+  assessProfileImport,
+  ReviewedImport,
+  runAiImportSingleFlight,
+} from '../utils/aiImportQuality';
+import {
   User as UserIcon,
   Mail,
   Phone,
@@ -107,12 +120,13 @@ const EMPTY_PROFILE = (uid: string, email: string): ProfileData => ({
 
 // ─────────────────── REVIEW MODAL ───────────────────
 interface ReviewModalProps {
-  parsed: Partial<ProfileData>;
+  review: ReviewedImport<ProfileData>;
   onConfirm: (data: Partial<ProfileData>) => void;
   onCancel: () => void;
 }
 
-function ReviewModal({ parsed, onConfirm, onCancel }: ReviewModalProps) {
+function ReviewModal({ review, onConfirm, onCancel }: ReviewModalProps) {
+  const parsed = review.data;
   const sections = [
     {
       label: 'Personal Details',
@@ -182,6 +196,19 @@ function ReviewModal({ parsed, onConfirm, onCancel }: ReviewModalProps) {
       preview: parsed.languages?.join(', ') || 'Not found',
     },
   ];
+  const sectionConfidenceKey = (label: string) => {
+    if (label.startsWith('Personal')) return 'personalDetails';
+    if (label.startsWith('Professional')) return 'summary';
+    if (label.startsWith('Career')) return 'careerObjective';
+    if (label.startsWith('Experience')) return 'experience';
+    if (label.startsWith('Internships')) return 'internships';
+    if (label.startsWith('Education')) return 'education';
+    if (label.startsWith('Projects')) return 'projects';
+    if (label.startsWith('Skills')) return 'skills';
+    if (label.startsWith('Certifications')) return 'certifications';
+    if (label.startsWith('Achievements')) return 'achievements';
+    return 'languages';
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
@@ -212,6 +239,15 @@ function ReviewModal({ parsed, onConfirm, onCancel }: ReviewModalProps) {
 
         {/* Extracted sections list */}
         <div className="flex-1 overflow-y-auto p-6 space-y-2">
+          <div className="mb-4 flex items-center justify-between rounded-xl border border-emerald-900/50 bg-emerald-950/20 p-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-emerald-300">Import confidence</p>
+              <p className="mt-0.5 text-xs text-zinc-500">{review.confidence.rejectedFields} unsupported fields excluded</p>
+            </div>
+            <span className="rounded-full bg-emerald-400/15 px-3 py-1 text-sm font-black text-emerald-300">
+              {review.confidence.overall}%
+            </span>
+          </div>
           {sections.map((s, i) => (
             <div
               key={i}
@@ -229,9 +265,16 @@ function ReviewModal({ parsed, onConfirm, onCancel }: ReviewModalProps) {
                 )}
               </div>
               <div className="min-w-0">
-                <p className={`text-xs font-bold uppercase tracking-wider ${s.hasData ? 'text-emerald-300' : 'text-zinc-500'}`}>
-                  {s.label}
-                </p>
+                <div className="flex items-center justify-between gap-3">
+                  <p className={`text-xs font-bold uppercase tracking-wider ${s.hasData ? 'text-emerald-300' : 'text-zinc-500'}`}>
+                    {s.label}
+                  </p>
+                  {review.confidence.sections[sectionConfidenceKey(s.label)] && (
+                    <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                      {review.confidence.sections[sectionConfidenceKey(s.label)].score}% {review.confidence.sections[sectionConfidenceKey(s.label)].level}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-zinc-400 mt-0.5 truncate leading-relaxed">{s.preview}</p>
               </div>
             </div>
@@ -276,7 +319,10 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
   const [importMode, setImportMode] = useState<'pdf' | 'docx' | 'image' | 'text' | null>(null);
   const [importText, setImportText] = useState('');
   const [importParsing, setImportParsing] = useState(false);
-  const [reviewData, setReviewData] = useState<Partial<ProfileData> | null>(null);
+  const [reviewData, setReviewData] = useState<ReviewedImport<ProfileData> | null>(null);
+  const [importProgress, setImportProgress] = useState(0);
+  const [importStatus, setImportStatus] = useState('');
+  const importInProgressRef = useRef(false);
 
   // Local profile state
   const [localProfile, setLocalProfile] = useState<ProfileData>(
@@ -441,12 +487,17 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
   // Education
   const addEducation = () => {
     if (!tempEdu.degree || !tempEdu.institution) { showToasts('Degree and Institution are required.', 'info'); return; }
-    const e: EducationEntry = { id: 'edu_' + Math.random().toString(36).substring(2, 9), degree: tempEdu.degree || '', institution: tempEdu.institution || '', location: tempEdu.location || '', startDate: tempEdu.startDate || '', endDate: tempEdu.endDate || '', gpa: tempEdu.gpa || '', description: tempEdu.description || '' };
+    const e: EducationEntry = { id: 'edu_' + Math.random().toString(36).substring(2, 9), degree: tempEdu.degree || '', institution: tempEdu.institution || '', location: tempEdu.location || '', startDate: tempEdu.startDate || '', endDate: tempEdu.endDate || '', gpa: tempEdu.gpa || '', scoreType: getEducationScoreType({ degree: tempEdu.degree || '', gpa: tempEdu.gpa || '', scoreType: tempEdu.scoreType }), description: tempEdu.description || '' };
     setLocalProfile(p => ({ ...p, education: [...p.education, e] }));
     setTempEdu({});
     showToasts('Education entry added.', 'success');
   };
   const removeEducation = (id: string) => setLocalProfile(p => ({ ...p, education: p.education.filter(e => e.id !== id) }));
+  const updateEducationScoreType = (id: string, scoreType: EducationEntry['scoreType']) =>
+    setLocalProfile(p => ({
+      ...p,
+      education: p.education.map(entry => entry.id === id ? { ...entry, scoreType } : entry),
+    }));
 
   // Experience
   const addExperience = () => {
@@ -558,12 +609,19 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
     if (!file || !importMode || importMode === 'text') return;
     if (fileInputRef.current) fileInputRef.current.value = '';
 
+    if (importInProgressRef.current) {
+      showToasts('Import already in progress.', 'info');
+      return;
+    }
     if (!isAiConfigured) {
       showToasts('Please configure an AI provider in Settings first.', 'error');
       return;
     }
 
+    importInProgressRef.current = true;
     setImportParsing(true);
+    setImportProgress(20);
+    setImportStatus('Extracting resume text...');
     showToasts('Extracting text from file...', 'info');
     try {
       let rawText = '';
@@ -577,28 +635,49 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
       }
 
       showToasts('Parsing with AI...', 'info');
-      const parsed = await aiParseProfileImport(userSettings!, rawText);
-      setReviewData(parsed);
+      setImportProgress(60);
+      setImportStatus('Verifying extracted information...');
+      const review = await runAiImportSingleFlight(async () => {
+        const parsed = await aiParseProfileImport(userSettings!, rawText);
+        return assessProfileImport(parsed, rawText);
+      });
+      setReviewData(review);
+      setImportProgress(100);
+      setImportStatus('Ready for review');
     } catch (err: any) {
       console.error(err);
       showToasts(err?.message || 'Import failed. Check file format and AI settings.', 'error');
     } finally {
+      importInProgressRef.current = false;
       setImportParsing(false);
     }
   };
 
   const handleTextImport = async () => {
+    if (importInProgressRef.current) {
+      showToasts('Import already in progress.', 'info');
+      return;
+    }
     if (!importText.trim()) { showToasts('Please paste some resume text first.', 'info'); return; }
     if (!isAiConfigured) { showToasts('Please configure an AI provider in Settings first.', 'error'); return; }
 
+    importInProgressRef.current = true;
     setImportParsing(true);
+    setImportProgress(35);
+    setImportStatus('Verifying extracted information...');
     showToasts('Parsing with AI...', 'info');
     try {
-      const parsed = await aiParseProfileImport(userSettings!, importText);
-      setReviewData(parsed);
+      const review = await runAiImportSingleFlight(async () => {
+        const parsed = await aiParseProfileImport(userSettings!, importText);
+        return assessProfileImport(parsed, importText);
+      });
+      setReviewData(review);
+      setImportProgress(100);
+      setImportStatus('Ready for review');
     } catch (err: any) {
       showToasts(err?.message || 'AI parsing failed.', 'error');
     } finally {
+      importInProgressRef.current = false;
       setImportParsing(false);
     }
   };
@@ -615,7 +694,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
         },
         summary: parsed.summary?.trim() || prev.summary,
         careerObjective: parsed.careerObjective?.trim() || prev.careerObjective,
-        education: parsed.education?.length ? parsed.education.map(e => ({ ...e, id: e.id || 'edu_' + Math.random().toString(36).substring(2, 9) })) : prev.education,
+        education: parsed.education?.length ? parsed.education.map(e => ({ ...e, ...normalizeEducationScore(e as unknown as Record<string, unknown>), id: e.id || 'edu_' + Math.random().toString(36).substring(2, 9) })) : prev.education,
         experience: parsed.experience?.length ? parsed.experience.map(e => ({ ...e, id: e.id || 'exp_' + Math.random().toString(36).substring(2, 9) })) : prev.experience,
         internships: parsed.internships?.length ? parsed.internships.map(e => ({ ...e, id: e.id || 'int_' + Math.random().toString(36).substring(2, 9) })) : (prev.internships || []),
         projects: parsed.projects?.length ? parsed.projects.map(e => ({ ...e, id: e.id || 'proj_' + Math.random().toString(36).substring(2, 9) })) : prev.projects,
@@ -664,7 +743,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
       <AnimatePresence>
         {reviewData && (
           <ReviewModal
-            parsed={reviewData}
+            review={reviewData}
             onConfirm={handleConfirmImport}
             onCancel={() => setReviewData(null)}
           />
@@ -876,28 +955,38 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
                   <textarea
                     value={importText}
                     onChange={e => setImportText(e.target.value)}
+                    disabled={importParsing}
                     rows={6}
                     placeholder="Paste your resume text here..."
                     className="w-full p-3 bg-zinc-900 border border-zinc-700 rounded-xl text-xs text-zinc-300 font-mono focus:border-indigo-500 outline-none resize-none leading-relaxed placeholder:text-zinc-600"
                   />
                   <div className="flex gap-2">
-                    <button onClick={() => { setImportMode(null); setImportText(''); }} className="flex-1 py-2 text-xs font-bold text-zinc-400 border border-zinc-700 rounded-xl hover:bg-zinc-800 transition cursor-pointer">Cancel</button>
+                    <button disabled={importParsing} onClick={() => { setImportMode(null); setImportText(''); }} className="flex-1 py-2 text-xs font-bold text-zinc-400 border border-zinc-700 rounded-xl hover:bg-zinc-800 transition cursor-pointer disabled:cursor-not-allowed disabled:opacity-40">Cancel</button>
                     <button
                       onClick={handleTextImport}
                       disabled={importParsing || !importText.trim()}
                       className="flex-1 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1"
                     >
-                      {importParsing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Sparkles className="h-3.5 w-3.5" />Review import</>}
+                      {importParsing ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />{importStatus}</> : <><Sparkles className="h-3.5 w-3.5" />Review import</>}
                     </button>
                   </div>
                 </motion.div>
               )}
             </AnimatePresence>
 
-            {importParsing && importMode !== 'text' && (
-              <div className="flex items-center gap-2 text-xs text-indigo-400 font-semibold bg-indigo-950/20 border border-indigo-900/30 p-3 rounded-xl">
-                <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-                <span>Extracting and parsing your resume...</span>
+            {importParsing && (
+              <div className="space-y-2 text-xs text-indigo-400 font-semibold bg-indigo-950/20 border border-indigo-900/30 p-3 rounded-xl">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin shrink-0" />{importStatus}</span>
+                  <span>{importProgress}%</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
+                  <motion.div
+                    className="h-full rounded-full bg-indigo-400"
+                    animate={{ width: `${importProgress}%` }}
+                    transition={{ duration: 0.25 }}
+                  />
+                </div>
               </div>
             )}
           </div>
@@ -1136,7 +1225,19 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
                         <div className="flex-1 min-w-0">
                           <p className="font-bold text-white text-sm">{edu.degree}</p>
                           <p className="text-zinc-400 text-xs mt-0.5">{edu.institution}{edu.location ? ` · ${edu.location}` : ''}</p>
-                          <p className="text-[10px] text-zinc-600 font-semibold mt-1">{edu.startDate}{edu.endDate ? ` – ${edu.endDate}` : ''}{edu.gpa ? ` · GPA: ${edu.gpa}` : ''}</p>
+                          <p className="text-[10px] text-zinc-600 font-semibold mt-1">{edu.startDate}{edu.endDate ? ` – ${edu.endDate}` : ''}{edu.gpa ? ` · ${formatEducationScore(edu)}` : ''}</p>
+                          <label className="mt-2 flex max-w-48 items-center gap-2">
+                            <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-600">Score Type</span>
+                            <select
+                              value={getEducationScoreType(edu)}
+                              onChange={event => updateEducationScoreType(edu.id, event.target.value as EducationEntry['scoreType'])}
+                              className="min-w-0 flex-1 rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-[10px] font-semibold text-zinc-300 outline-none focus:border-indigo-500"
+                            >
+                              {EDUCATION_SCORE_TYPES.map(option => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </select>
+                          </label>
                         </div>
                         <button onClick={() => removeEducation(edu.id)} className="p-1.5 rounded-lg text-zinc-500 hover:text-rose-400 hover:bg-rose-950/20 transition cursor-pointer shrink-0">
                           <Trash2 className="h-3.5 w-3.5" />
@@ -1150,11 +1251,34 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
                         <input type="text" placeholder="Degree (e.g. B.S. Computer Science) *" value={tempEdu.degree || ''} onChange={e => setTempEdu({ ...tempEdu, degree: e.target.value })} className={miniInputCls} />
                         <input type="text" placeholder="Institution *" value={tempEdu.institution || ''} onChange={e => setTempEdu({ ...tempEdu, institution: e.target.value })} className={miniInputCls} />
                       </div>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                         <input type="text" placeholder="Location" value={tempEdu.location || ''} onChange={e => setTempEdu({ ...tempEdu, location: e.target.value })} className={miniInputCls} />
                         <input type="text" placeholder="Start" value={tempEdu.startDate || ''} onChange={e => setTempEdu({ ...tempEdu, startDate: e.target.value })} className={miniInputCls} />
                         <input type="text" placeholder="End" value={tempEdu.endDate || ''} onChange={e => setTempEdu({ ...tempEdu, endDate: e.target.value })} className={miniInputCls} />
-                        <input type="text" placeholder="GPA" value={tempEdu.gpa || ''} onChange={e => setTempEdu({ ...tempEdu, gpa: e.target.value })} className={miniInputCls} />
+                        <label className="space-y-1">
+                          <span className="block text-[10px] font-bold uppercase tracking-wider text-zinc-500">Score Type</span>
+                          <select
+                            value={getEducationScoreType({ degree: tempEdu.degree || '', gpa: tempEdu.gpa || '', scoreType: tempEdu.scoreType })}
+                            onChange={e => setTempEdu({ ...tempEdu, scoreType: e.target.value as EducationEntry['scoreType'] })}
+                            className={miniInputCls}
+                          >
+                            {EDUCATION_SCORE_TYPES.map(option => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="space-y-1 md:col-span-2">
+                          <span className="block text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                            {getEducationScoreFieldLabel({ degree: tempEdu.degree || '', gpa: tempEdu.gpa || '', scoreType: tempEdu.scoreType })}
+                          </span>
+                          <input
+                            type="text"
+                            placeholder={getEducationScorePlaceholder({ degree: tempEdu.degree || '', gpa: tempEdu.gpa || '', scoreType: tempEdu.scoreType })}
+                            value={tempEdu.gpa || ''}
+                            onChange={e => setTempEdu({ ...tempEdu, gpa: e.target.value })}
+                            className={miniInputCls}
+                          />
+                        </label>
                       </div>
                       <button onClick={addEducation} className="w-full bg-zinc-800 hover:bg-zinc-700 text-white font-bold py-2 rounded-xl text-xs transition cursor-pointer">Add Education</button>
                     </div>
