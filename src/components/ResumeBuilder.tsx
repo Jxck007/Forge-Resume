@@ -1,5 +1,15 @@
 import React, { useState } from 'react';
-import { ResumeData, ExperienceEntry, EducationEntry, ProjectEntry, CertificationEntry, CustomSection, CustomSectionItem, UserSettings } from '../types';
+import {
+  ResumeData,
+  ExperienceEntry,
+  EducationEntry,
+  ProjectEntry,
+  CertificationEntry,
+  CustomSection,
+  CustomSectionItem,
+  UserSettings,
+  StandardSectionKey,
+} from '../types';
 import {
   User,
   Sparkles,
@@ -34,6 +44,14 @@ import {
   getEducationScorePlaceholder,
   getEducationScoreType,
 } from '../utils/educationScore';
+import {
+  applyLanguageSuggestion,
+  issuesForSection,
+} from '../utils/languageQuality';
+import {
+  DEFAULT_SECTION_HEADINGS,
+  resolveSectionHeading,
+} from '../utils/resolveSectionHeading';
 
 interface ResumeBuilderProps {
   resume: ResumeData;
@@ -96,6 +114,153 @@ function ResumeBuilder({
 
   const toggleSection = (sec: string) => {
     setOpenSections(prev => ({ ...prev, [sec]: !prev[sec] }));
+  };
+
+  const getSectionHeading = (sectionKey: StandardSectionKey, fallback?: string) =>
+    resolveSectionHeading(sectionKey, resume.sectionConfig, fallback || DEFAULT_SECTION_HEADINGS[sectionKey]);
+
+  const getSectionIssues = (sectionKey: string) => issuesForSection(resume, sectionKey);
+
+  const updateSectionHeadingConfig = (
+    sectionKey: StandardSectionKey,
+    mode: 'default' | 'custom',
+    customTitle?: string
+  ) => {
+    onChange({
+      ...resume,
+      sectionConfig: {
+        ...resume.sectionConfig,
+        [sectionKey]: {
+          mode: mode === 'custom' && customTitle?.trim() ? 'custom' : mode,
+          customTitle: customTitle ?? resume.sectionConfig[sectionKey]?.customTitle ?? '',
+        },
+      },
+    });
+  };
+
+  const applySuggestion = (issueId: string, suggestionId: string) => {
+    onChange(applyLanguageSuggestion(resume, issueId, suggestionId));
+    showToasts('Language suggestion applied.', 'success');
+  };
+
+  const renderHeadingControls = (sectionKey: StandardSectionKey) => {
+    const config = resume.sectionConfig[sectionKey];
+    const headingIssues = getSectionIssues(sectionKey).filter(issue => issue.path.startsWith(`sectionConfig.${sectionKey}`));
+
+    return (
+      <div className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-3 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Section heading</span>
+          <span className="rounded-full bg-[#171A21] px-2 py-0.5 text-[10px] font-semibold text-[#72DFCA]">
+            Live title: {getSectionHeading(sectionKey)}
+          </span>
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => updateSectionHeadingConfig(sectionKey, 'default', '')}
+            className={`rounded-lg border px-3 py-2 text-[11px] font-semibold transition ${
+              config?.mode !== 'custom'
+                ? 'border-[#72DFCA] bg-[#12312D] text-[#B5F5E8]'
+                : 'border-[#2A2E37] bg-[#171A21] text-zinc-300 hover:border-[#3A4B5E]'
+            }`}
+          >
+            Use default heading
+          </button>
+          <button
+            type="button"
+            onClick={() => updateSectionHeadingConfig(sectionKey, 'custom', config?.customTitle || getSectionHeading(sectionKey))}
+            className={`rounded-lg border px-3 py-2 text-[11px] font-semibold transition ${
+              config?.mode === 'custom'
+                ? 'border-[#72DFCA] bg-[#12312D] text-[#B5F5E8]'
+                : 'border-[#2A2E37] bg-[#171A21] text-zinc-300 hover:border-[#3A4B5E]'
+            }`}
+          >
+            Use custom heading
+          </button>
+        </div>
+        {config?.mode === 'custom' && (
+          <input
+            type="text"
+            value={config?.customTitle || ''}
+            onChange={event => updateSectionHeadingConfig(sectionKey, 'custom', event.target.value)}
+            placeholder={DEFAULT_SECTION_HEADINGS[sectionKey]}
+            className="w-full rounded-lg border border-[#2A2E37] bg-[#171A21] px-3 py-2 text-xs text-white outline-none focus:border-[#72DFCA]"
+          />
+        )}
+        {headingIssues.length > 0 && (
+          <div className="space-y-2 rounded-lg border border-amber-400/20 bg-amber-950/20 p-3">
+            {headingIssues.map(issue => (
+              <div key={issue.id} className="space-y-2 text-[11px] text-amber-100">
+                <div className="flex items-start justify-between gap-3">
+                  <span>{issue.message}</span>
+                  <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-300">
+                    {issue.category}
+                  </span>
+                </div>
+                {issue.suggestions.slice(0, 1).map(suggestion => (
+                  <button
+                    key={suggestion.id}
+                    type="button"
+                    onClick={() => applySuggestion(issue.id, suggestion.id)}
+                    className="rounded-md border border-amber-300/30 bg-amber-50/10 px-2 py-1 text-[10px] font-semibold text-amber-100 transition hover:bg-amber-50/20"
+                  >
+                    {suggestion.label}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderSectionQualityPanel = (sectionKey: string) => {
+    const issues = getSectionIssues(sectionKey).filter(issue => !issue.path.startsWith(`sectionConfig.${sectionKey}`));
+    if (issues.length === 0) {
+      return (
+        <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/15 px-3 py-2 text-[11px] text-emerald-200">
+          No live spelling or grammar issues detected in this section.
+        </div>
+      );
+    }
+
+    return (
+      <div className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-3 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Language review</span>
+          <span className="rounded-full bg-rose-950/30 px-2 py-0.5 text-[10px] font-semibold text-rose-200">
+            {issues.length} issue{issues.length === 1 ? '' : 's'}
+          </span>
+        </div>
+        <div className="space-y-3">
+          {issues.slice(0, 4).map(issue => (
+            <div key={issue.id} className="rounded-lg border border-[#2A2E37] bg-[#171A21] p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-[11px] font-semibold text-white">{issue.label}</div>
+                  <div className="mt-1 text-[11px] text-zinc-400">{issue.message}</div>
+                </div>
+                <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zinc-300">
+                  {issue.severity}
+                </span>
+              </div>
+              {issue.suggestions.slice(0, 1).map(suggestion => (
+                <button
+                  key={suggestion.id}
+                  type="button"
+                  onClick={() => applySuggestion(issue.id, suggestion.id)}
+                  className="mt-3 rounded-md border border-[#31413F] bg-[#10201E] px-2 py-1 text-[10px] font-semibold text-[#A7E9DC] transition hover:bg-[#14302C]"
+                >
+                  {suggestion.label}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   const updatePersonal = (field: string, val: string) => {
@@ -620,6 +785,25 @@ function ResumeBuilder({
         </div>
       </div>
 
+      <div className="rounded-2xl border border-[#2A2E37] bg-[#171A21] p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-[#72DFCA]">
+              <HelpCircle className="h-4 w-4" />
+              <span>Live Language Intelligence</span>
+            </div>
+            <p className="mt-1 text-xs text-zinc-400">
+              Editor, preview, PDF, and ATS review all consume the same live language-quality state.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2 text-[11px] font-semibold">
+            <span className="rounded-full bg-[#10201E] px-3 py-1 text-[#A7E9DC]">Score {resume.languageQuality.score}/100</span>
+            <span className="rounded-full bg-[#171E28] px-3 py-1 text-zinc-300">{resume.languageQuality.summary.total} open issues</span>
+            <span className="rounded-full bg-rose-950/30 px-3 py-1 text-rose-200">{resume.languageQuality.summary.highSeverity} high severity</span>
+          </div>
+        </div>
+      </div>
+
       {/* RENDER SECTIONS DYNAMICALLY ACCORDING TO REORDER SEQUENCE */}
 
       {/* PERSONAL INFO (Always visible at starting point) */}
@@ -742,6 +926,31 @@ function ResumeBuilder({
               />
             </div>
             <div className="sm:col-span-2">
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">Link Display Mode</label>
+              <div className="grid grid-cols-2 gap-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] p-1">
+                {([
+                  ['embedded', 'Embedded'],
+                  ['raw', 'Raw URL'],
+                ] as const).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => onChange({ ...resume, linkDisplayMode: mode })}
+                    className={`rounded-md px-3 py-2 text-[11px] font-semibold transition ${
+                      resume.linkDisplayMode === mode
+                        ? 'bg-[#72DFCA] text-[#08110F]'
+                        : 'text-zinc-300 hover:bg-[#171A21]'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1 text-[10px] text-zinc-500">
+                Embedded renders labeled clickable links. Raw URL prints the full address exactly as stored.
+              </p>
+            </div>
+            <div className="sm:col-span-2">
               <label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">Profile Photo (Base64 / Data URL)</label>
               <input
                 type="text"
@@ -807,7 +1016,12 @@ function ResumeBuilder({
               <div className="flex items-center justify-between p-4 bg-[#0F1115]">
                 <div className="flex items-center gap-2.5">
                   <UserCheck className="h-4.5 w-4.5 text-indigo-500" />
-                  <h3 className="text-sm font-bold text-white">Professional Summary</h3>
+                  <h3 className="text-sm font-bold text-white">{getSectionHeading('summary')}</h3>
+                  {getSectionIssues('summary').length > 0 && (
+                    <span className="rounded-full bg-rose-950/30 px-2 py-0.5 text-[10px] font-bold text-rose-200">
+                      {getSectionIssues('summary').length}
+                    </span>
+                  )}
                   {isHidden && <span className="text-[10px] bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-400">Hidden</span>}
                 </div>
                 {/* Control Tools */}
@@ -823,6 +1037,8 @@ function ResumeBuilder({
 
               {isOpen && (
                 <div className="p-4 border-t border-[#2A2E37] space-y-3">
+                  {renderHeadingControls('summary')}
+                  {renderSectionQualityPanel('summary')}
                   <div>
                     <label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">Executive Summary Text</label>
                     <textarea
@@ -885,8 +1101,13 @@ function ResumeBuilder({
               <div className="flex items-center justify-between p-4 bg-[#0F1115]">
                 <div className="flex items-center gap-2.5">
                   <Briefcase className="h-4.5 w-4.5 text-indigo-500" />
-                  <h3 className="text-sm font-bold text-white">Professional Experience</h3>
+                  <h3 className="text-sm font-bold text-white">{getSectionHeading('experience')}</h3>
                   <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-500">{resume.experience.length}</span>
+                  {getSectionIssues('experience').length > 0 && (
+                    <span className="rounded-full bg-rose-950/30 px-2 py-0.5 text-[10px] font-bold text-rose-200">
+                      {getSectionIssues('experience').length}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center space-x-1.5">
                   <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
@@ -900,6 +1121,8 @@ function ResumeBuilder({
 
               {isOpen && (
                 <div className="p-4 border-t border-[#2A2E37] space-y-4">
+                  {renderHeadingControls('experience')}
+                  {renderSectionQualityPanel('experience')}
                   {resume.experience.map((e, eIdx) => (
                     <div key={e.id} className="p-4.5 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
                       <div className="absolute top-3 right-3 flex items-center space-x-1 opacity-0 group-hover/card:opacity-100 transition">
@@ -1060,7 +1283,7 @@ function ResumeBuilder({
               <div className="flex items-center justify-between p-4 bg-[#0F1115]">
                 <div className="flex items-center gap-2.5">
                   <Star className="h-4.5 w-4.5 text-indigo-400" />
-                  <h3 className="text-sm font-bold text-white">Internships</h3>
+                  <h3 className="text-sm font-bold text-white">{getSectionHeading('internships')}</h3>
                   <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-500">{list.length}</span>
                 </div>
                 <div className="flex items-center space-x-1.5">
@@ -1075,6 +1298,8 @@ function ResumeBuilder({
 
               {isOpen && (
                 <div className="p-4 border-t border-[#2A2E37] space-y-4">
+                  {renderHeadingControls('internships')}
+                  {renderSectionQualityPanel('internships')}
                   {list.map((i, iIdx) => (
                     <div key={i.id} className="p-4.5 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
                       <div className="absolute top-3 right-3 flex items-center space-x-1 opacity-0 group-hover/card:opacity-100 transition">
@@ -1257,7 +1482,7 @@ function ResumeBuilder({
               <div className="flex items-center justify-between p-4 bg-[#0F1115]">
                 <div className="flex items-center gap-2.5">
                   <GraduationCap className="h-4.5 w-4.5 text-indigo-500" />
-                  <h3 className="text-sm font-bold text-white">Education & Certification</h3>
+                  <h3 className="text-sm font-bold text-white">{getSectionHeading('education')}</h3>
                   <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-500">{resume.education.length}</span>
                 </div>
                 <div className="flex items-center space-x-1.5">
@@ -1272,6 +1497,8 @@ function ResumeBuilder({
 
               {isOpen && (
                 <div className="p-4 border-t border-[#2A2E37] space-y-4">
+                  {renderHeadingControls('education')}
+                  {renderSectionQualityPanel('education')}
                   {resume.education.map((edu, eduIdx) => (
                     <div key={edu.id} className="p-4.5 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
                       <button
@@ -1379,7 +1606,7 @@ function ResumeBuilder({
               <div className="flex items-center justify-between p-4 bg-[#0F1115]">
                 <div className="flex items-center gap-2.5">
                   <Compass className="h-4.5 w-4.5 text-indigo-500" />
-                  <h3 className="text-sm font-bold text-white">Technical Core Skills</h3>
+                  <h3 className="text-sm font-bold text-white">{getSectionHeading('skills')}</h3>
                 </div>
                 <div className="flex items-center space-x-1.5">
                   <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
@@ -1393,6 +1620,8 @@ function ResumeBuilder({
 
               {isOpen && (
                 <div className="p-4 border-t border-[#2A2E37] space-y-4">
+                  {renderHeadingControls('skills')}
+                  {renderSectionQualityPanel('skills')}
                   <div className="bg-amber-50/50 bg-amber-950/10 p-2.5 rounded-xl border border-amber-200/20 text-[10px] text-amber-700 text-amber-400 font-medium leading-relaxed">
                     Enter items as a comma-separated list. (e.g. JavaScript, Python, C++). Commas instantly break items into beautiful visual badge elements on the live layout preview.
                   </div>
@@ -1459,7 +1688,7 @@ function ResumeBuilder({
               <div className="flex items-center justify-between p-4 bg-[#0F1115]">
                 <div className="flex items-center gap-2.5">
                   <FolderLock className="h-4.5 w-4.5 text-indigo-500" />
-                  <h3 className="text-sm font-bold text-white">Engineering Projects</h3>
+                  <h3 className="text-sm font-bold text-white">{getSectionHeading('projects')}</h3>
                   <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-500">{resume.projects.length}</span>
                 </div>
                 <div className="flex items-center space-x-1.5">
@@ -1474,6 +1703,8 @@ function ResumeBuilder({
 
               {isOpen && (
                 <div className="p-4 border-t border-[#2A2E37] space-y-4">
+                  {renderHeadingControls('projects')}
+                  {renderSectionQualityPanel('projects')}
                   {resume.projects.map((proj, pIdx) => (
                     <div key={proj.id} className="p-4.5 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
                       <button
@@ -1602,7 +1833,7 @@ function ResumeBuilder({
               <div className="flex items-center justify-between p-4 bg-[#0F1115]">
                 <div className="flex items-center gap-2.5">
                   <Award className="h-4.5 w-4.5 text-indigo-500" />
-                  <h3 className="text-sm font-bold text-white">Certifications & Licensure</h3>
+                  <h3 className="text-sm font-bold text-white">{getSectionHeading('certifications')}</h3>
                   <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-500">{resume.certifications.length}</span>
                 </div>
                 <div className="flex items-center space-x-1.5">
@@ -1617,6 +1848,8 @@ function ResumeBuilder({
 
               {isOpen && (
                 <div className="p-4 border-t border-[#2A2E37] space-y-4">
+                  {renderHeadingControls('certifications')}
+                  {renderSectionQualityPanel('certifications')}
                   {resume.certifications.map(c => (
                     <div key={c.id} className="p-3.5 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
                       <button
@@ -1692,7 +1925,7 @@ function ResumeBuilder({
               <div className="flex items-center justify-between p-4 bg-[#0F1115]">
                 <div className="flex items-center gap-2.5">
                   <Star className="h-4.5 w-4.5 text-indigo-500" />
-                  <h3 className="text-sm font-bold text-white">Honors & Achievements</h3>
+                  <h3 className="text-sm font-bold text-white">{getSectionHeading('achievements')}</h3>
                 </div>
                 <div className="flex items-center space-x-1.5">
                   <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
@@ -1706,6 +1939,8 @@ function ResumeBuilder({
 
               {isOpen && (
                 <div className="p-4 border-t border-[#2A2E37] space-y-3">
+                  {renderHeadingControls('achievements')}
+                  {renderSectionQualityPanel('achievements')}
                   <label className="block text-[10px] font-bold text-zinc-400">Achievements (One per line)</label>
                   <textarea
                     value={resume.achievements.join('\n')}
@@ -1727,7 +1962,7 @@ function ResumeBuilder({
               <div className="flex items-center justify-between p-4 bg-[#0F1115]">
                 <div className="flex items-center gap-2.5">
                   <Globe className="h-4.5 w-4.5 text-indigo-500" />
-                  <h3 className="text-sm font-bold text-white">Volunteer & Community work</h3>
+                  <h3 className="text-sm font-bold text-white">{getSectionHeading('volunteering')}</h3>
                 </div>
                 <div className="flex items-center space-x-1.5">
                   <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
@@ -1741,6 +1976,8 @@ function ResumeBuilder({
 
               {isOpen && (
                 <div className="p-4 border-t border-[#2A2E37] space-y-4">
+                  {renderHeadingControls('volunteering')}
+                  {renderSectionQualityPanel('volunteering')}
                   {resume.volunteering.map(v => (
                     <div key={v.id} className="p-3.5 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
                       <button
@@ -1826,7 +2063,7 @@ function ResumeBuilder({
               <div className="flex items-center justify-between p-4 bg-[#0F1115]">
                 <div className="flex items-center gap-2.5">
                   <Globe className="h-4.5 w-4.5 text-indigo-500" />
-                  <h3 className="text-sm font-bold text-white">Languages Spoken</h3>
+                  <h3 className="text-sm font-bold text-white">{getSectionHeading('languages')}</h3>
                 </div>
                 <div className="flex items-center space-x-1.5">
                   <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
@@ -1840,6 +2077,8 @@ function ResumeBuilder({
 
               {isOpen && (
                 <div className="p-4 border-t border-[#2A2E37] space-y-3">
+                  {renderHeadingControls('languages')}
+                  {renderSectionQualityPanel('languages')}
                   <label className="block text-[10px] font-bold text-zinc-400">Languages & fluency (Lines or commas separated)</label>
                   <input
                     type="text"
@@ -2047,6 +2286,7 @@ const hasSameEditorData = (previous: ResumeData, next: ResumeData) =>
   previous === next || (
     previous.id === next.id &&
     previous.title === next.title &&
+    previous.linkDisplayMode === next.linkDisplayMode &&
     previous.personalDetails === next.personalDetails &&
     previous.summary === next.summary &&
     previous.education === next.education &&
@@ -2059,6 +2299,8 @@ const hasSameEditorData = (previous: ResumeData, next: ResumeData) =>
     previous.volunteering === next.volunteering &&
     previous.languages === next.languages &&
     previous.customSections === next.customSections &&
+    previous.sectionConfig === next.sectionConfig &&
+    previous.languageQuality === next.languageQuality &&
     previous.sectionOrder === next.sectionOrder &&
     previous.sectionOrderMode === next.sectionOrderMode &&
     previous.hiddenSections === next.hiddenSections &&

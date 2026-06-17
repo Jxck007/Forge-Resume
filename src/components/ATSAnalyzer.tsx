@@ -93,6 +93,101 @@ const hydrateHistoricMetrics = (report: AtsReport): LocalAtsResult => ({
   missingItems: report.missingItems,
   warnings: report.warnings,
   recommendations: report.recommendations,
+  diagnosticCategories: report.diagnosticCategories || [],
+  diagnosticIssues: report.diagnosticIssues || [],
+  languageAnalysis: report.languageAnalysis || {
+    spellingAccuracy: report.breakdown.readability,
+    grammarCorrectness: report.breakdown.readability,
+    readability: report.breakdown.readability,
+    clarity: report.breakdown.readability,
+  },
+  layoutAnalysis: report.layoutAnalysis || {
+    estimatedLineDensity: 0,
+    sectionSizeWeight: 0,
+    templateScalingFactor: 1,
+    expectedColumns: 'single',
+    detectedColumns: 'single',
+  },
+  responsivenessAnalysis: report.responsivenessAnalysis || {
+    score: 100,
+    mobileScore: 100,
+    tabletScore: 100,
+    textOverflowRisk: 'low',
+    columnCollapseRisk: 'low',
+    notes: [],
+  },
+});
+
+const normalizeLocalMetrics = (metrics: Partial<LocalAtsResult>): LocalAtsResult => ({
+  atsScore: Number.isFinite(metrics.atsScore) ? Number(metrics.atsScore) : 0,
+  matchScore: typeof metrics.matchScore === 'number' ? metrics.matchScore : null,
+  breakdown: metrics.breakdown || {
+    parsing: 0,
+    contact: 0,
+    completeness: 0,
+    skills: 0,
+    experience: 0,
+    projects: 0,
+    readability: 0,
+  },
+  pageFitDetails: metrics.pageFitDetails || {
+    score: 0,
+    estimatedPages: 1,
+    fitCategory: 'single-page safe',
+    overflowRisk: 'low',
+  },
+  keywordGaps: metrics.keywordGaps || {
+    missing: [],
+    weakCoverage: [],
+    strongCoverage: [],
+  },
+  skillAnalysis: metrics.skillAnalysis || {
+    coveragePercent: 0,
+    diversityScore: 0,
+    visible: true,
+    placement: 'main',
+    templateFamily: 'unknown',
+  },
+  projectAnalysis: metrics.projectAnalysis || {
+    hasLinks: 0,
+    hasMetrics: 0,
+    qualityScore: 0,
+  },
+  targetComparison: metrics.targetComparison ? {
+    ...metrics.targetComparison,
+    roleFamily: metrics.targetComparison.roleFamily || 'general-other',
+    roleFamilyLabel: metrics.targetComparison.roleFamilyLabel || 'General / Other',
+    strongEvidence: metrics.targetComparison.strongEvidence || [],
+    weakEvidence: metrics.targetComparison.weakEvidence || [],
+  } : null,
+  analysisModules: metrics.analysisModules || [],
+  strengths: metrics.strengths || [],
+  missingItems: metrics.missingItems || [],
+  warnings: metrics.warnings || [],
+  recommendations: metrics.recommendations || [],
+  diagnosticCategories: metrics.diagnosticCategories || [],
+  diagnosticIssues: metrics.diagnosticIssues || [],
+  languageAnalysis: metrics.languageAnalysis || {
+    spellingAccuracy: metrics.breakdown?.readability || 0,
+    grammarCorrectness: metrics.breakdown?.readability || 0,
+    readability: metrics.breakdown?.readability || 0,
+    clarity: metrics.breakdown?.readability || 0,
+  },
+  layoutAnalysis: metrics.layoutAnalysis || {
+    estimatedLineDensity: 0,
+    sectionSizeWeight: 0,
+    templateScalingFactor: 1,
+    expectedColumns: 'single',
+    detectedColumns: 'single',
+  },
+  responsivenessAnalysis: metrics.responsivenessAnalysis || {
+    score: 100,
+    mobileScore: 100,
+    tabletScore: 100,
+    textOverflowRisk: 'low',
+    columnCollapseRisk: 'low',
+    notes: [],
+  },
 });
 
 const analysisPause = (milliseconds: number) =>
@@ -354,12 +449,28 @@ export default function ATSAnalyzer({
   const [historicReports, setHistoricReports] = useState<AtsReport[]>([]);
   const [savingReport, setSavingReport] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
+  const [issueFilter, setIssueFilter] = useState<'all' | 'critical'>('all');
+  const [sectionIssueFilter, setSectionIssueFilter] = useState<'all' | string>('all');
+  const [expandedIssueIds, setExpandedIssueIds] = useState<string[]>([]);
   const presentationReport = localMetrics ? {
     strengths: localMetrics.strengths,
     weaknesses: localMetrics.warnings,
     recommendations: localMetrics.recommendations,
     atsOptimizationAdvice: 'Recommendations are informational and never change parsing, match, or page-fit scores.',
   } : null;
+  const selectedPresetResume = resumes.find(resume => resume.id === selectedResumeId);
+  const filteredDiagnosticIssues = localMetrics
+    ? localMetrics.diagnosticIssues.filter(issue => (
+        (issueFilter === 'all' || issue.severity === 'high') &&
+        (sectionIssueFilter === 'all' || issue.affectedSection === sectionIssueFilter)
+      ))
+    : [];
+  const groupedDiagnosticIssues = filteredDiagnosticIssues.reduce<Record<string, typeof filteredDiagnosticIssues>>((groups, issue) => {
+    const key = issue.category;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(issue);
+    return groups;
+  }, {});
 
   // Cancellation tokens
   const isCancelledRef = useRef<boolean>(false);
@@ -371,6 +482,14 @@ export default function ATSAnalyzer({
     setScanType('targeted');
     setJobDescription(entry.description);
     showToasts(`Loaded "${entry.title}" sample job description!`, 'success');
+  };
+
+  const toggleIssueExpanded = (issueId: string) => {
+    setExpandedIssueIds(current => (
+      current.includes(issueId)
+        ? current.filter(id => id !== issueId)
+        : [...current, issueId]
+    ));
   };
 
   // Load parent resume options
@@ -414,17 +533,7 @@ export default function ATSAnalyzer({
           data.localMetrics?.keywordGaps &&
           data.parsedResume
         ) {
-          setLocalMetrics({
-            ...data.localMetrics,
-            analysisModules: data.localMetrics.analysisModules || [],
-            targetComparison: data.localMetrics.targetComparison ? {
-              ...data.localMetrics.targetComparison,
-              roleFamily: data.localMetrics.targetComparison.roleFamily || 'general-other',
-              roleFamilyLabel: data.localMetrics.targetComparison.roleFamilyLabel || 'General / Other',
-              strongEvidence: data.localMetrics.targetComparison.strongEvidence || [],
-              weakEvidence: data.localMetrics.targetComparison.weakEvidence || [],
-            } : null,
-          });
+          setLocalMetrics(normalizeLocalMetrics(data.localMetrics));
           setParsedCandidateJson(data.parsedResume);
           setScanType(data.scanType === 'general' ? 'general' : 'targeted');
           setProgressStep('completed');
@@ -625,6 +734,12 @@ export default function ATSAnalyzer({
             : undefined,
           hiddenSections: activeMode === 'preset'
             ? resumes.find(candidate => candidate.id === selectedResumeId)?.hiddenSections
+            : undefined,
+          languageQuality: activeMode === 'preset'
+            ? resumes.find(candidate => candidate.id === selectedResumeId)?.languageQuality
+            : undefined,
+          sectionOrder: activeMode === 'preset'
+            ? resumes.find(candidate => candidate.id === selectedResumeId)?.sectionOrder
             : undefined,
         }
       );
@@ -1184,6 +1299,8 @@ export default function ATSAnalyzer({
                     <div><dt className="text-gray-400">Skills</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.skillAnalysis.coveragePercent}%</dd></div>
                     <div><dt className="text-gray-400">Projects</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.projectAnalysis.qualityScore}%</dd></div>
                     <div><dt className="text-gray-400">Warnings</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.warnings.length}</dd></div>
+                    <div><dt className="text-gray-400">Mobile</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.responsivenessAnalysis.mobileScore}%</dd></div>
+                    <div><dt className="text-gray-400">Tablet</dt><dd className="font-black text-gray-900 dark:text-white">{localMetrics.responsivenessAnalysis.tabletScore}%</dd></div>
                   </dl>
                 </div>
               </div>
@@ -1217,6 +1334,202 @@ export default function ATSAnalyzer({
                     </div>
                   ))}
                 </dl>
+              </div>
+
+              <div className="rounded-3xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950 p-6 shadow-xl shadow-gray-100/10 dark:shadow-black/20">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-black text-gray-900 dark:text-white">Explainable ATS categories</h3>
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      Each score is independently traceable to issues and section-level evidence.
+                    </p>
+                  </div>
+                  <span className="text-xs font-bold uppercase tracking-wide text-gray-400">
+                    {localMetrics.diagnosticCategories.length} categories
+                  </span>
+                </div>
+                <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {localMetrics.diagnosticCategories.map(category => (
+                    <div key={category.id} className="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h4 className="text-sm font-black text-gray-900 dark:text-white">{category.label}</h4>
+                          <p className="mt-1 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">{category.explanation}</p>
+                        </div>
+                        <span className="rounded-lg bg-white px-2 py-1 text-xs font-black text-gray-900 shadow-sm dark:bg-gray-950 dark:text-white">
+                          {category.score}%
+                        </span>
+                      </div>
+                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-800">
+                        <div className={`h-full rounded-full ${getProgressColor(category.score)}`} style={{ width: `${category.score}%` }} />
+                      </div>
+                      <p className="mt-3 text-[11px] font-semibold text-gray-500 dark:text-gray-400">
+                        {category.issues.length} linked issue{category.issues.length === 1 ? '' : 's'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+                <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-xl shadow-gray-100/10 dark:border-gray-800 dark:bg-gray-950">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-black text-gray-900 dark:text-white">Issue drilldown</h3>
+                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        Expand any issue to inspect section, exact location, suggested fix, and score impact.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIssueFilter('all')}
+                        className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-wide ${issueFilter === 'all' ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900' : 'bg-gray-100 text-gray-600 dark:bg-gray-900 dark:text-gray-300'}`}
+                      >
+                        All issues
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIssueFilter('critical')}
+                        className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-wide ${issueFilter === 'critical' ? 'bg-rose-600 text-white' : 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-200'}`}
+                      >
+                        Critical only
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSectionIssueFilter('all')}
+                      className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-wide ${sectionIssueFilter === 'all' ? 'border-cyan-300 bg-cyan-50 text-cyan-700 dark:border-cyan-800 dark:bg-cyan-950/30 dark:text-cyan-200' : 'border-gray-200 text-gray-500 dark:border-gray-800 dark:text-gray-400'}`}
+                    >
+                      All sections
+                    </button>
+                    {Array.from(new Set((localMetrics.diagnosticIssues || []).map(issue => issue.affectedSection))).slice(0, 12).map(section => (
+                      <button
+                        key={section}
+                        type="button"
+                        onClick={() => setSectionIssueFilter(section)}
+                        className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-wide ${sectionIssueFilter === section ? 'border-cyan-300 bg-cyan-50 text-cyan-700 dark:border-cyan-800 dark:bg-cyan-950/30 dark:text-cyan-200' : 'border-gray-200 text-gray-500 dark:border-gray-800 dark:text-gray-400'}`}
+                      >
+                        {section}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-5 space-y-4">
+                    {Object.entries(groupedDiagnosticIssues).length > 0 ? Object.entries(groupedDiagnosticIssues).map(([category, issues]) => (
+                      <div key={category} className="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <h4 className="text-xs font-black uppercase tracking-widest text-gray-500 dark:text-gray-400">{category}</h4>
+                          <span className="text-[10px] font-bold text-gray-400">{issues.length} issues</span>
+                        </div>
+                        <div className="space-y-2">
+                          {issues.map(issue => {
+                            const expanded = expandedIssueIds.includes(issue.id);
+                            return (
+                              <div key={issue.id} className="rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-950">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleIssueExpanded(issue.id)}
+                                  className="flex w-full items-start justify-between gap-3 p-3 text-left"
+                                >
+                                  <div>
+                                    <div className="text-xs font-black text-gray-900 dark:text-white">{issue.title}</div>
+                                    <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                                      {issue.affectedSection} · {issue.location}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
+                                      issue.severity === 'high'
+                                        ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300'
+                                        : issue.severity === 'medium'
+                                          ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
+                                          : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
+                                    }`}>
+                                      {issue.severity}
+                                    </span>
+                                    <ChevronRight className={`h-4 w-4 text-gray-400 transition ${expanded ? 'rotate-90' : ''}`} />
+                                  </div>
+                                </button>
+                                {expanded && (
+                                  <div className="border-t border-gray-100 px-3 py-3 text-[11px] leading-relaxed text-gray-600 dark:border-gray-800 dark:text-gray-300">
+                                    <p><span className="font-bold text-gray-900 dark:text-white">Problem:</span> {issue.explanation}</p>
+                                    <p className="mt-2"><span className="font-bold text-gray-900 dark:text-white">Suggested fix:</span> {issue.suggestedFix}</p>
+                                    <p className="mt-2"><span className="font-bold text-gray-900 dark:text-white">Impact on score:</span> -{issue.impact} points</p>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )) : (
+                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-950/10 dark:text-emerald-200">
+                        No issues match the current filters.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-6">
+                  <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-xl shadow-gray-100/10 dark:border-gray-800 dark:bg-gray-950">
+                    <h3 className="text-sm font-black text-gray-900 dark:text-white">Language quality signals</h3>
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                      {[
+                        ['Spelling accuracy', localMetrics.languageAnalysis.spellingAccuracy],
+                        ['Grammar correctness', localMetrics.languageAnalysis.grammarCorrectness],
+                        ['Readability', localMetrics.languageAnalysis.readability],
+                        ['Clarity', localMetrics.languageAnalysis.clarity],
+                      ].map(([label, value]) => (
+                        <div key={String(label)} className="rounded-xl border border-gray-100 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900">
+                          <span className="block text-[10px] font-bold uppercase tracking-wide text-gray-400">{label}</span>
+                          <span className="mt-1 block text-lg font-black text-gray-900 dark:text-white">{value}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-xl shadow-gray-100/10 dark:border-gray-800 dark:bg-gray-950">
+                    <h3 className="text-sm font-black text-gray-900 dark:text-white">Layout intelligence</h3>
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                      {[
+                        ['Line density', localMetrics.layoutAnalysis.estimatedLineDensity],
+                        ['Section weight', localMetrics.layoutAnalysis.sectionSizeWeight],
+                        ['Scaling factor', localMetrics.layoutAnalysis.templateScalingFactor],
+                        ['Columns', `${localMetrics.layoutAnalysis.detectedColumns} / ${localMetrics.layoutAnalysis.expectedColumns}`],
+                      ].map(([label, value]) => (
+                        <div key={String(label)} className="rounded-xl border border-gray-100 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900">
+                          <span className="block text-[10px] font-bold uppercase tracking-wide text-gray-400">{label}</span>
+                          <span className="mt-1 block text-sm font-black capitalize text-gray-900 dark:text-white">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-xl shadow-gray-100/10 dark:border-gray-800 dark:bg-gray-950">
+                    <h3 className="text-sm font-black text-gray-900 dark:text-white">Responsiveness</h3>
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                      {[
+                        ['Overall', localMetrics.responsivenessAnalysis.score],
+                        ['Mobile', localMetrics.responsivenessAnalysis.mobileScore],
+                        ['Tablet', localMetrics.responsivenessAnalysis.tabletScore],
+                        ['Overflow risk', localMetrics.responsivenessAnalysis.textOverflowRisk],
+                        ['Column collapse', localMetrics.responsivenessAnalysis.columnCollapseRisk],
+                      ].map(([label, value]) => (
+                        <div key={String(label)} className="rounded-xl border border-gray-100 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900">
+                          <span className="block text-[10px] font-bold uppercase tracking-wide text-gray-400">{label}</span>
+                          <span className="mt-1 block text-sm font-black capitalize text-gray-900 dark:text-white">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {localMetrics.responsivenessAnalysis.notes.length > 0 && (
+                      <ul className="mt-4 space-y-1 text-[11px] text-gray-600 dark:text-gray-300">
+                        {localMetrics.responsivenessAnalysis.notes.map(note => <li key={note}>{note}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <div className="rounded-3xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950 p-6 shadow-xl shadow-gray-100/10 dark:shadow-black/20">
@@ -1357,6 +1670,36 @@ export default function ATSAnalyzer({
                   )}
                 </div>
               </div>
+
+              {activeMode === 'preset' && selectedPresetResume?.languageQuality && (
+                <div className="rounded-3xl border border-teal-200 bg-teal-50/40 p-6 dark:border-teal-900/40 dark:bg-teal-950/10">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-black text-gray-900 dark:text-white">Language readiness</h3>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Live spelling, grammar, and clarity signals synced from the resume editor.
+                      </p>
+                    </div>
+                    <span className="text-sm font-black text-teal-700 dark:text-teal-300">
+                      {selectedPresetResume.languageQuality.score}/100
+                    </span>
+                  </div>
+                  <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-5">
+                    {[
+                      ['Issues', selectedPresetResume.languageQuality.summary.total],
+                      ['Spelling', selectedPresetResume.languageQuality.summary.spelling],
+                      ['Grammar', selectedPresetResume.languageQuality.summary.grammar],
+                      ['Clarity', selectedPresetResume.languageQuality.summary.clarity],
+                      ['High severity', selectedPresetResume.languageQuality.summary.highSeverity],
+                    ].map(([label, value]) => (
+                      <div key={String(label)} className="rounded-xl border border-teal-100 bg-white/80 p-3 dark:border-teal-900/30 dark:bg-gray-950/70">
+                        <span className="block text-[10px] font-bold uppercase tracking-wide text-gray-400">{label}</span>
+                        <span className="mt-1 block text-lg font-black text-gray-900 dark:text-white">{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {localMetrics.missingItems.length > 0 && (
                 <div className="rounded-3xl border border-amber-200 bg-amber-50/40 p-6 dark:border-amber-900/40 dark:bg-amber-950/10">

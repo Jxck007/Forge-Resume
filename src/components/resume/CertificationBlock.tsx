@@ -1,18 +1,20 @@
 import React from 'react';
 import { Link, Text, View } from '@react-pdf/renderer';
-import { resumeLinkLabels } from '../../design-system/resumeSystem';
 import { ResumeCertification } from '../../schema/resumeSchema';
 import { PaginationPolicy, ResumePrimitiveStyles, safePdfUrl } from './types';
+import { ResumeData } from '../../types';
 
 interface CertificationBlockProps extends React.Attributes {
   key?: React.Key;
   certification: ResumeCertification;
+  linkDisplayMode: ResumeData['linkDisplayMode'];
   styles: ResumePrimitiveStyles;
   pagination: PaginationPolicy;
 }
 
 export function CertificationBlock({
   certification,
+  linkDisplayMode,
   styles,
   pagination,
 }: CertificationBlockProps) {
@@ -27,7 +29,7 @@ export function CertificationBlock({
         <Text style={styles.entryDetailMeta}>{certification.issuer}</Text>
         {credentialUrl ? (
           <Link src={credentialUrl} style={styles.entryLink}>
-            {resumeLinkLabels.credential}
+            {linkDisplayMode === 'raw' ? credentialUrl : 'Credential: Click here'}
           </Link>
         ) : null}
       </View>

@@ -1,5 +1,6 @@
 import { ResumeData, TemplateId } from '../types';
 import { formatEducationScore } from './educationScore';
+import { resolveSectionHeading } from './resolveSectionHeading';
 
 export const DEFAULT_SECTION_ORDER = [
   'summary',
@@ -85,22 +86,24 @@ export function serializeResumeBySectionOrder(resume: ResumeData): string {
 
     switch (sectionId) {
       case 'summary':
-        return resume.summary ? [`Professional Summary:\n${resume.summary}`] : [];
+        return resume.summary
+          ? [`${resolveSectionHeading('summary', resume.sectionConfig)}:\n${resume.summary}`]
+          : [];
       case 'experience':
         return resume.experience.length > 0
-          ? [`Professional Experience:\n${resume.experience.map(entry =>
+          ? [`${resolveSectionHeading('experience', resume.sectionConfig)}:\n${resume.experience.map(entry =>
               `${entry.title} at ${entry.company} | ${entry.startDate} - ${entry.endDate}\n${entry.description}`
             ).join('\n')}`]
           : [];
       case 'internships':
         return (resume.internships || []).length > 0
-          ? [`Internships:\n${(resume.internships || []).map(entry =>
+          ? [`${resolveSectionHeading('internships', resume.sectionConfig)}:\n${(resume.internships || []).map(entry =>
               `${entry.role} at ${entry.company} | ${entry.startDate} - ${entry.endDate}\n${entry.description}`
             ).join('\n')}`]
           : [];
       case 'education':
         return resume.education.length > 0
-          ? [`Education:\n${resume.education.map(entry =>
+          ? [`${resolveSectionHeading('education', resume.sectionConfig)}:\n${resume.education.map(entry =>
               `${entry.degree} at ${entry.institution} | ${entry.startDate} - ${entry.endDate}${entry.gpa ? ` | ${formatEducationScore(entry)}` : ''}`
             ).join('\n')}`]
           : [];
@@ -113,14 +116,14 @@ export function serializeResumeBySectionOrder(resume: ResumeData): string {
           ['Soft Skills', resume.skills.softSkills],
         ].filter(([, values]) => (values as string[]).length > 0);
         return categories.length > 0
-          ? [`Skills:\n${categories.map(([label, values]) =>
+          ? [`${resolveSectionHeading('skills', resume.sectionConfig)}:\n${categories.map(([label, values]) =>
               `${label}:\n${(values as string[]).join('\n')}`
             ).join('\n\n')}`]
           : [];
       }
       case 'projects':
         return resume.projects.length > 0
-          ? [`Projects:\n${resume.projects.map(project =>
+          ? [`${resolveSectionHeading('projects', resume.sectionConfig)}:\n${resume.projects.map(project =>
               [
                 project.name,
                 project.technologies ? `Technologies: ${project.technologies}` : '',
@@ -133,7 +136,7 @@ export function serializeResumeBySectionOrder(resume: ResumeData): string {
           : [];
       case 'certifications':
         return resume.certifications.length > 0
-          ? [`Certifications:\n${resume.certifications.map(entry =>
+          ? [`${resolveSectionHeading('certifications', resume.sectionConfig)}:\n${resume.certifications.map(entry =>
               [
                 entry.name,
                 entry.issuer,
@@ -144,16 +147,18 @@ export function serializeResumeBySectionOrder(resume: ResumeData): string {
           : [];
       case 'achievements':
         return resume.achievements.length > 0
-          ? [`Achievements:\n${resume.achievements.join('\n')}`]
+          ? [`${resolveSectionHeading('achievements', resume.sectionConfig)}:\n${resume.achievements.join('\n')}`]
           : [];
       case 'volunteering':
         return resume.volunteering.length > 0
-          ? [`Volunteering:\n${resume.volunteering.map(entry =>
+          ? [`${resolveSectionHeading('volunteering', resume.sectionConfig)}:\n${resume.volunteering.map(entry =>
               `${entry.title} at ${entry.company}\n${entry.description}`
             ).join('\n')}`]
           : [];
       case 'languages':
-        return resume.languages.length > 0 ? [`Languages:\n${resume.languages.join(', ')}`] : [];
+        return resume.languages.length > 0
+          ? [`${resolveSectionHeading('languages', resume.sectionConfig)}:\n${resume.languages.join(', ')}`]
+          : [];
       default:
         return [];
     }

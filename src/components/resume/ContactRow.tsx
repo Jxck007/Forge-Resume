@@ -1,15 +1,15 @@
 import React from 'react';
 import { Link, Text, View } from '@react-pdf/renderer';
-import { resumeLinkLabels } from '../../design-system/resumeSystem';
-import { PersonalDetails } from '../../types';
+import { PersonalDetails, ResumeData } from '../../types';
 import { ResumePrimitiveStyles, safePdfUrl } from './types';
 
 interface ContactRowProps {
   details: PersonalDetails;
+  linkDisplayMode: ResumeData['linkDisplayMode'];
   styles: ResumePrimitiveStyles;
 }
 
-export function ContactRow({ details, styles }: ContactRowProps) {
+export function ContactRow({ details, linkDisplayMode, styles }: ContactRowProps) {
   const contacts = [
     details.phone
       ? { label: details.phone, url: `tel:${details.phone.replace(/\s+/g, '')}` }
@@ -17,11 +17,22 @@ export function ContactRow({ details, styles }: ContactRowProps) {
     details.email ? { label: details.email, url: `mailto:${details.email}` } : null,
     details.location ? { label: details.location } : null,
     details.linkedin
-      ? { label: resumeLinkLabels.linkedin, url: safePdfUrl(details.linkedin) }
+      ? {
+          label: linkDisplayMode === 'raw' ? safePdfUrl(details.linkedin) : 'LinkedIn: View Profile',
+          url: safePdfUrl(details.linkedin),
+        }
       : null,
-    details.github ? { label: resumeLinkLabels.github, url: safePdfUrl(details.github) } : null,
+    details.github
+      ? {
+          label: linkDisplayMode === 'raw' ? safePdfUrl(details.github) : 'GitHub: Click here',
+          url: safePdfUrl(details.github),
+        }
+      : null,
     details.website
-      ? { label: resumeLinkLabels.portfolio, url: safePdfUrl(details.website) }
+      ? {
+          label: linkDisplayMode === 'raw' ? safePdfUrl(details.website) : 'Portfolio: Visit site',
+          url: safePdfUrl(details.website),
+        }
       : null,
   ].filter(Boolean) as Array<{ label: string; url?: string }>;
 

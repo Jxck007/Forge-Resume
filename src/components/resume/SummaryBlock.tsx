@@ -5,6 +5,7 @@ import { PaginationPolicy, ResumePrimitiveStyles } from './types';
 
 interface SummaryBlockProps extends React.Attributes {
   key?: React.Key;
+  heading: string;
   summary: string;
   plan: ResumeTemplatePlan;
   styles: ResumePrimitiveStyles;
@@ -13,6 +14,7 @@ interface SummaryBlockProps extends React.Attributes {
 }
 
 export function SummaryBlock({
+  heading,
   summary,
   plan,
   styles,
@@ -27,11 +29,7 @@ export function SummaryBlock({
       minPresenceAhead={pagination.section}
     >
       <Text style={styles.sectionHeading} minPresenceAhead={pagination.heading}>
-        {plan.family === 'student'
-          ? 'Profile'
-          : plan.summaryStyle === 'executive'
-            ? 'Executive Summary'
-            : 'Professional Summary'}
+        {heading}
       </Text>
       <Text
         style={plan.summaryStyle === 'executive' ? styles.executiveSummary : styles.summary}

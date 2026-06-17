@@ -1,12 +1,13 @@
 import React from 'react';
 import { Link, Text, View } from '@react-pdf/renderer';
-import { resumeLinkLabels } from '../../design-system/resumeSystem';
 import { ResumeProject } from '../../schema/resumeSchema';
 import { PaginationPolicy, ResumePrimitiveStyles, safePdfUrl } from './types';
+import { ResumeData } from '../../types';
 
 interface ProjectBlockProps extends React.Attributes {
   key?: React.Key;
   project: ResumeProject;
+  linkDisplayMode: ResumeData['linkDisplayMode'];
   styles: ResumePrimitiveStyles;
   pagination: PaginationPolicy;
   emphasized?: boolean;
@@ -14,16 +15,23 @@ interface ProjectBlockProps extends React.Attributes {
 
 export function ProjectBlock({
   project,
+  linkDisplayMode,
   styles,
   pagination,
   emphasized = false,
 }: ProjectBlockProps) {
   const links = [
     project.links.github
-      ? { label: resumeLinkLabels.github, url: safePdfUrl(project.links.github) }
+      ? {
+          label: linkDisplayMode === 'raw' ? safePdfUrl(project.links.github) : 'GitHub: Click here',
+          url: safePdfUrl(project.links.github),
+        }
       : null,
     project.links.demo
-      ? { label: resumeLinkLabels.demo, url: safePdfUrl(project.links.demo) }
+      ? {
+          label: linkDisplayMode === 'raw' ? safePdfUrl(project.links.demo) : 'Live Demo: Click here',
+          url: safePdfUrl(project.links.demo),
+        }
       : null,
   ].filter(Boolean) as Array<{ label: string; url: string }>;
 

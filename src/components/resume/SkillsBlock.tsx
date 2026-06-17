@@ -6,6 +6,7 @@ import { PaginationPolicy, ResumePrimitiveStyles } from './types';
 
 interface SkillsBlockProps extends React.Attributes {
   key?: React.Key;
+  heading: string;
   skills: ResumeSkillBlock;
   variant: ResumeSkillsVariant;
   styles: ResumePrimitiveStyles;
@@ -14,6 +15,7 @@ interface SkillsBlockProps extends React.Attributes {
 }
 
 export function SkillsBlock({
+  heading,
   skills,
   variant,
   styles,
@@ -37,7 +39,7 @@ export function SkillsBlock({
       minPresenceAhead={pagination.section}
     >
       <Text style={styles.sectionHeading} minPresenceAhead={pagination.heading}>
-        Skills
+        {heading}
       </Text>
       <View style={variant === 'compact-grid' ? styles.compactSkillGrid : styles.skillRows}>
         {rows.map(([label, values]) => (

@@ -1,11 +1,12 @@
 import React from 'react';
 import { Image, Text, View } from '@react-pdf/renderer';
-import { PersonalDetails } from '../../types';
+import { PersonalDetails, ResumeData } from '../../types';
 import { ContactRow } from './ContactRow';
 import { ResumePrimitiveStyles } from './types';
 
 interface HeaderBlockProps {
   details: PersonalDetails;
+  linkDisplayMode: ResumeData['linkDisplayMode'];
   photoSource?: string;
   usePhoto: boolean;
   styles: ResumePrimitiveStyles;
@@ -13,6 +14,7 @@ interface HeaderBlockProps {
 
 export function HeaderBlock({
   details,
+  linkDisplayMode,
   photoSource,
   usePhoto,
   styles,
@@ -24,7 +26,7 @@ export function HeaderBlock({
         {details.professionalTitle ? (
           <Text style={styles.title}>{details.professionalTitle}</Text>
         ) : null}
-        <ContactRow details={details} styles={styles} />
+        <ContactRow details={details} linkDisplayMode={linkDisplayMode} styles={styles} />
       </View>
       {usePhoto && photoSource ? <Image src={photoSource} style={styles.photo} /> : null}
     </View>

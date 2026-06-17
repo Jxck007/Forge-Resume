@@ -58,6 +58,7 @@ export interface ResumeAchievement {
 
 export interface NormalizedResume {
   source: ResumeData;
+  linkDisplayMode: ResumeData['linkDisplayMode'];
   projects: ResumeProject[];
   certifications: ResumeCertification[];
   skills: ResumeSkillBlock;
@@ -110,6 +111,7 @@ const normalizeExperience = (
 
 export const normalizeResumeData = (resume: ResumeData): NormalizedResume => ({
   source: resume,
+  linkDisplayMode: resume.linkDisplayMode,
   projects: resume.projects.map(project => ({
     id: project.id,
     title: project.name,

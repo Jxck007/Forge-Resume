@@ -10,8 +10,10 @@ import {
 import {
   ResumeData,
   TemplateId,
+  StandardSectionKey,
 } from '../types';
 import { resolveResumeSectionOrder } from '../utils/sectionOrder';
+import { resolveSectionHeading } from '../utils/resolveSectionHeading';
 import {
   resumeAlignment,
   resumeSpacing,
@@ -773,7 +775,7 @@ const buildStyles = (
       flexDirection: 'row',
       marginTop: 2 * skillsFactor,
       paddingBottom: (templatePlan.skills === 'rows' ? 1 : 0) * skillsFactor,
-      borderBottomWidth: templatePlan.skills === 'rows' ? 0.25 : 0,
+      borderBottomWidth: templateId === 'atsFriendly' ? 0 : templatePlan.skills === 'rows' ? 0.25 : 0,
       borderBottomColor: profile.border,
     },
     skillLabel: {
@@ -903,6 +905,8 @@ function ResumePdfDocument({
     resume.useProfilePhoto !== false &&
     Boolean(photoSource);
   const details = resume.personalDetails;
+  const resolvedHeading = (sectionKey: StandardSectionKey, fallback?: string) =>
+    resolveSectionHeading(sectionKey, resume.sectionConfig, fallback);
 
   const hasSectionContent = (sectionId: string) => {
     if (hiddenSections.has(sectionId)) return false;
@@ -984,6 +988,7 @@ function ResumePdfDocument({
           <SummaryBlock
             key={sectionId}
             summary={resume.summary}
+            heading={resolvedHeading('summary')}
             plan={plan}
             styles={primitiveStyles}
             pagination={pagination}
@@ -992,7 +997,7 @@ function ResumePdfDocument({
         );
       case 'experience':
         return renderEntrySection(
-          'Experience',
+          resolvedHeading('experience'),
           normalized.experience.map(entry => (
             <ExperienceBlock
               key={entry.id}
@@ -1005,7 +1010,7 @@ function ResumePdfDocument({
         );
       case 'internships':
         return renderEntrySection(
-          'Internships',
+          resolvedHeading('internships'),
           normalized.internships.map(entry => (
             <ExperienceBlock
               key={entry.id}
@@ -1018,7 +1023,7 @@ function ResumePdfDocument({
         );
       case 'education':
         return renderEntrySection(
-          'Education',
+          resolvedHeading('education'),
           normalized.education.map(entry => (
             <EducationBlock
               key={entry.id}
@@ -1031,11 +1036,12 @@ function ResumePdfDocument({
         );
       case 'projects':
         return renderEntrySection(
-          plan.projectEmphasis === 'primary' ? 'Selected Projects' : 'Projects',
+          resolvedHeading('projects', plan.projectEmphasis === 'primary' ? 'Selected Projects' : 'Projects'),
           normalized.projects.map(project => (
             <ProjectBlock
               key={project.id}
               project={project}
+              linkDisplayMode={resume.linkDisplayMode}
               styles={primitiveStyles}
               pagination={pagination}
               emphasized={plan.projectEmphasis === 'primary'}
@@ -1045,11 +1051,12 @@ function ResumePdfDocument({
         );
       case 'certifications':
         return renderEntrySection(
-          'Certifications',
+          resolvedHeading('certifications'),
           normalized.certifications.map(certification => (
             <CertificationBlock
               key={certification.id}
               certification={certification}
+              linkDisplayMode={resume.linkDisplayMode}
               styles={primitiveStyles}
               pagination={pagination}
             />
@@ -1061,6 +1068,7 @@ function ResumePdfDocument({
           <SkillsBlock
             key={sectionId}
             skills={normalized.skills}
+            heading={resolvedHeading('skills')}
             variant={plan.skills}
             styles={primitiveStyles}
             pagination={pagination}
@@ -1069,7 +1077,7 @@ function ResumePdfDocument({
         );
       case 'achievements':
         return renderEntrySection(
-          plan.family === 'business' ? 'Impact' : 'Achievements',
+          resolvedHeading('achievements', plan.family === 'business' ? 'Impact' : 'Achievements'),
           normalized.achievements.map(achievement => (
             <AchievementBullet
               key={achievement.id}
@@ -1081,7 +1089,7 @@ function ResumePdfDocument({
         );
       case 'volunteering':
         return renderEntrySection(
-          'Volunteering',
+          resolvedHeading('volunteering'),
           normalized.volunteering.map(entry => (
             <ExperienceBlock
               key={entry.id}
@@ -1099,7 +1107,7 @@ function ResumePdfDocument({
             style={[styles.section, styles.terminalSection]}
             wrap={false}
           >
-            <Text style={styles.sectionHeading}>Languages</Text>
+            <Text style={styles.sectionHeading}>{resolvedHeading('languages')}</Text>
             <Text style={styles.skillValues}>{resume.languages.join(', ')}</Text>
           </View>
         ) : null;
@@ -1154,6 +1162,7 @@ function ResumePdfDocument({
       <Page size="A4" style={styles.page} wrap>
         <HeaderBlock
           details={details}
+          linkDisplayMode={resume.linkDisplayMode}
           photoSource={photoSource}
           usePhoto={usePhoto}
           styles={primitiveStyles}

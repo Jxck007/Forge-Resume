@@ -19,6 +19,70 @@ export function isTemplateId(value: unknown): value is TemplateId {
   return typeof value === 'string' && TEMPLATE_IDS.includes(value as TemplateId);
 }
 
+export const STANDARD_SECTION_KEYS = [
+  'summary',
+  'education',
+  'experience',
+  'skills',
+  'projects',
+  'certifications',
+  'achievements',
+  'internships',
+  'volunteering',
+  'languages',
+] as const;
+
+export type StandardSectionKey = (typeof STANDARD_SECTION_KEYS)[number];
+
+export interface SectionHeadingConfig {
+  mode: 'default' | 'custom';
+  customTitle?: string;
+}
+
+export type ResumeSectionConfig = Record<StandardSectionKey, SectionHeadingConfig>;
+
+export type LanguageIssueSeverity = 'low' | 'medium' | 'high';
+export type LanguageIssueCategory =
+  | 'spelling'
+  | 'grammar'
+  | 'clarity'
+  | 'consistency'
+  | 'duplicate';
+
+export interface LanguageSuggestion {
+  id: string;
+  replacement: string;
+  label: string;
+  status: 'pending' | 'accepted' | 'dismissed';
+}
+
+export interface LanguageIssue {
+  id: string;
+  path: string;
+  sectionKey: string;
+  label: string;
+  message: string;
+  category: LanguageIssueCategory;
+  severity: LanguageIssueSeverity;
+  originalText: string;
+  suggestions: LanguageSuggestion[];
+}
+
+export interface ResumeLanguageQuality {
+  score: number;
+  issues: LanguageIssue[];
+  summary: {
+    total: number;
+    spelling: number;
+    grammar: number;
+    clarity: number;
+    consistency: number;
+    duplicate: number;
+    highSeverity: number;
+  };
+  updatedAt: string;
+}
+
 export interface PersonalDetails {
   fullName: string;
   professionalTitle: string;
@@ -113,6 +177,7 @@ export interface ResumeData {
   userId: string;
   title: string;
   templateId: TemplateId;
+  linkDisplayMode: 'embedded' | 'raw';
   useProfilePhoto: boolean;
   personalDetails: PersonalDetails;
   summary: string;
@@ -126,6 +191,8 @@ export interface ResumeData {
   volunteering: ExperienceEntry[]; // shared model
   languages: string[];
   customSections: CustomSection[];
+  sectionConfig: ResumeSectionConfig;
+  languageQuality: ResumeLanguageQuality;
   sectionOrder: string[];
   sectionOrderMode?: 'template' | 'custom';
   hiddenSections: string[];
@@ -167,7 +234,67 @@ export interface ProfileData {
   volunteering: ExperienceEntry[];
   languages: string[];
   customSections: CustomSection[];
+  linkDisplayMode?: 'embedded' | 'raw';
   updatedAt: string;
+}
+
+export type AtsDiagnosticCategoryId =
+  | 'contentQuality'
+  | 'sectionCompleteness'
+  | 'sectionOrder'
+  | 'atsFormatting'
+  | 'keywordsMatch'
+  | 'layoutStructure'
+  | 'hrRiskFlags'
+  | 'seniorityFit'
+  | 'tailoringScore'
+  | 'responsivenessScore';
+
+export type AtsIssueSeverity = 'low' | 'medium' | 'high';
+export type AtsIssueCategory = 'content' | 'layout' | 'structure' | 'spelling' | 'atsRules' | 'responsiveness';
+
+export interface AtsDiagnosticIssue {
+  id: string;
+  title: string;
+  severity: AtsIssueSeverity;
+  category: AtsIssueCategory;
+  affectedSection: string;
+  explanation: string;
+  suggestedFix: string;
+  location: string;
+  impact: number;
+}
+
+export interface AtsDiagnosticCategoryScore {
+  id: AtsDiagnosticCategoryId;
+  label: string;
+  score: number;
+  explanation: string;
+  issues: string[];
+}
+
+export interface AtsLanguageAnalysis {
+  spellingAccuracy: number;
+  grammarCorrectness: number;
+  readability: number;
+  clarity: number;
+}
+
+export interface AtsLayoutAnalysis {
+  estimatedLineDensity: number;
+  sectionSizeWeight: number;
+  templateScalingFactor: number;
+  expectedColumns: 'single' | 'flexible';
+  detectedColumns: 'single' | 'multi';
+}
+
+export interface AtsResponsivenessAnalysis {
+  score: number;
+  mobileScore: number;
+  tabletScore: number;
+  textOverflowRisk: 'low' | 'medium' | 'high';
+  columnCollapseRisk: 'low' | 'medium' | 'high';
+  notes: string[];
 }
 
 export interface AtsReport {
@@ -239,5 +366,10 @@ export interface AtsReport {
   missingItems: string[];
   warnings: string[];
   recommendations: string[];
+  diagnosticCategories: AtsDiagnosticCategoryScore[];
+  diagnosticIssues: AtsDiagnosticIssue[];
+  languageAnalysis: AtsLanguageAnalysis;
+  layoutAnalysis: AtsLayoutAnalysis;
+  responsivenessAnalysis: AtsResponsivenessAnalysis;
   createdAt: string;
 }

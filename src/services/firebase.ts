@@ -30,6 +30,8 @@ import { ResumeData, UserSettings, AtsReport, ProfileData, TemplateId } from '..
 import { getAuthInstance, getDb, resetFirebaseConfiguration } from '../config/firebase';
 import { DEFAULT_SECTION_ORDER, normalizeSectionOrder } from '../utils/sectionOrder';
 import { normalizeEducationScore } from '../utils/educationScore';
+import { analyzeResumeLanguageQuality } from '../utils/languageQuality';
+import { createDefaultSectionConfig, normalizeSectionConfig } from '../utils/resolveSectionHeading';
 
 // Firestore error handling with dedicated JSON payload as mandated by SKILL
 export enum OperationType {
@@ -473,6 +475,7 @@ export async function createNewResume(userId: string, title: string, templateId:
     userId,
     title,
     templateId,
+    linkDisplayMode: initialData?.linkDisplayMode === 'raw' ? 'raw' : 'embedded',
     useProfilePhoto: initialData?.useProfilePhoto ?? true,
     personalDetails: {
       fullName: '',
@@ -505,6 +508,21 @@ export async function createNewResume(userId: string, title: string, templateId:
     volunteering: initialData?.volunteering || [],
     languages: initialData?.languages || [],
     customSections: initialData?.customSections || [],
+    sectionConfig: normalizeSectionConfig(initialData?.sectionConfig || createDefaultSectionConfig()),
+    languageQuality: initialData?.languageQuality || {
+      score: 100,
+      issues: [],
+      summary: {
+        total: 0,
+        spelling: 0,
+        grammar: 0,
+        clarity: 0,
+        consistency: 0,
+        duplicate: 0,
+        highSeverity: 0,
+      },
+      updatedAt: now,
+    },
     internships: initialData?.internships || [],
     sectionOrder: normalizeSectionOrder(
       initialData?.sectionOrder || DEFAULT_SECTION_ORDER,
@@ -516,6 +534,8 @@ export async function createNewResume(userId: string, title: string, templateId:
     createdAt: now,
     updatedAt: now,
   };
+
+  defaultResume.languageQuality = analyzeResumeLanguageQuality(defaultResume);
 
   // Cache locally first for instant offline readiness
   try {

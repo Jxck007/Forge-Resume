@@ -1,4 +1,11 @@
 import {
+  AtsDiagnosticCategoryScore,
+  AtsDiagnosticIssue,
+  AtsIssueCategory,
+  AtsIssueSeverity,
+  AtsLanguageAnalysis,
+  AtsLayoutAnalysis,
+  AtsResponsivenessAnalysis,
   CertificationEntry,
   EducationEntry,
   ExperienceEntry,
@@ -7,10 +14,12 @@ import {
   ProjectEntry,
   ResumeData,
   SkillCategory,
+  StandardSectionKey,
   TemplateId,
 } from '../types';
 import { normalizeEducationScore } from './educationScore';
-import { resumeTemplatePlans } from '../design-system/resumeSystem';
+import { ResumeTemplatePlan, resumeFamilyRules, resumeTemplatePlans } from '../design-system/resumeSystem';
+import { DEFAULT_SECTION_ORDER, resolveResumeSectionOrder, TEMPLATE_SECTION_PRIORITIES } from './sectionOrder';
 
 const ACTION_VERBS = [
   'achieved', 'architected', 'automated', 'built', 'created', 'delivered', 'designed',
@@ -189,6 +198,50 @@ const SECTION_PATTERNS: Array<[SectionKey, RegExp]> = [
   ['achievements', /^achievements?|awards?|accomplishments?$/i],
 ];
 
+const SECTION_ALIASES: Record<SectionKey, RegExp[]> = {
+  summary: [
+    /^(?:professional\s+)?summary$/i,
+    /^career\s+objective$/i,
+    /^objective$/i,
+    /^profile$/i,
+    /^about(?:\s+me)?$/i,
+  ],
+  skills: [
+    /^(?:technical|core)\s+skills$/i,
+    /^skills$/i,
+    /^core competencies$/i,
+    /^technologies$/i,
+  ],
+  experience: [
+    /^(?:professional\s+|work\s+)?experience$/i,
+    /^employment(?:\s+history)?$/i,
+    /^work history$/i,
+  ],
+  internships: [
+    /^internships?$/i,
+    /^training$/i,
+  ],
+  projects: [
+    /^(?:technical\s+|academic\s+)?projects?$/i,
+    /^portfolio$/i,
+  ],
+  education: [
+    /^education$/i,
+    /^academic(?:\s+background|\s+details)?$/i,
+    /^qualifications?$/i,
+  ],
+  certifications: [
+    /^certifications?$/i,
+    /^licenses?$/i,
+    /^courses$/i,
+  ],
+  achievements: [
+    /^achievements?$/i,
+    /^awards?$/i,
+    /^accomplishments?$/i,
+  ],
+};
+
 export type AtsSourceKind = 'structured' | 'text-pdf' | 'docx' | 'image-ocr';
 
 export interface WeightedKeyword {
@@ -259,12 +312,49 @@ export interface LocalAtsResult {
   missingItems: string[];
   warnings: string[];
   recommendations: string[];
+  diagnosticCategories: AtsDiagnosticCategoryScore[];
+  diagnosticIssues: AtsDiagnosticIssue[];
+  languageAnalysis: AtsLanguageAnalysis;
+  layoutAnalysis: AtsLayoutAnalysis;
+  responsivenessAnalysis: AtsResponsivenessAnalysis;
 }
 
 const clamp = (value: number, min = 0, max = 100) =>
   Math.max(min, Math.min(max, Math.round(value)));
 
 const unique = (values: string[]) => [...new Set(values.filter(Boolean))];
+
+const makeIssueId = (...parts: string[]) =>
+  parts
+    .join('-')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+const issueCategoryLabel = (category: AtsIssueCategory) => {
+  switch (category) {
+    case 'content': return 'Content';
+    case 'layout': return 'Layout';
+    case 'structure': return 'Structure';
+    case 'spelling': return 'Spelling';
+    case 'atsRules': return 'ATS Rules';
+    default: return 'Issue';
+  }
+};
+
+const createDiagnosticIssue = (input: {
+  title: string;
+  severity: AtsIssueSeverity;
+  category: AtsIssueCategory;
+  affectedSection: string;
+  explanation: string;
+  suggestedFix: string;
+  location: string;
+  impact: number;
+}): AtsDiagnosticIssue => ({
+  id: makeIssueId(input.category, input.affectedSection, input.title, input.location),
+  ...input,
+});
 
 const normalizeEvidenceText = (text: string) =>
   text
@@ -413,7 +503,8 @@ const flattenSkills = (skills: SkillCategory) =>
 const detectHeading = (line: string): SectionKey | null => {
   const normalized = line.replace(/[:|]+$/, '').trim();
   if (!normalized || normalized.length > 45) return null;
-  return SECTION_PATTERNS.find(([, pattern]) => pattern.test(normalized))?.[0] || null;
+  return (Object.entries(SECTION_ALIASES) as Array<[SectionKey, RegExp[]]>)
+    .find(([, patterns]) => patterns.some(pattern => pattern.test(normalized)))?.[0] || null;
 };
 
 const splitBlocks = (lines: string[]) => {
@@ -541,6 +632,26 @@ const parseCertifications = (lines: string[]): CertificationEntry[] =>
     url: line.match(/https?:\/\/[^\s)]+/i)?.[0] || '',
   }));
 
+const URL_PATTERN = /\bhttps?:\/\/[^\s)]+/gi;
+
+const extractUrls = (text: string) => unique((text.match(URL_PATTERN) || []).map(url => url.trim()));
+
+const parseTechnologyList = (technologies: string) =>
+  technologies
+    .split(/[,;|]/)
+    .map(value => value.trim())
+    .filter(Boolean);
+
+const hasRoleLikeProjectEvidence = (project: Pick<ProjectEntry, 'name' | 'description' | 'technologies'>) => {
+  const combined = `${project.name} ${project.description}`.toLowerCase();
+  const hasRoleSignal = /\b(?:engineer|developer|intern|lead|manager|analyst|architect|consultant|designer|researcher)\b/i.test(project.name) ||
+    /\b(?:built|developed|implemented|led|owned|delivered|launched|optimized|deployed|managed)\b/i.test(combined);
+  const techCount = parseTechnologyList(project.technologies).length;
+  const hasOutcome = IMPACT_WORDS.some(word => hasPhrase(combined, word)) ||
+    /(?:\d+(?:\.\d+)?%|\d+\+|\$[\d,.]+|\d+(?:\.\d+)?x\b|\d+\s*(?:users|clients|hours|days|teams|projects|million|billion|k)\b)/i.test(project.description);
+  return hasRoleSignal && techCount > 0 && hasOutcome;
+};
+
 export function validateResumeText(text: string): { isValid: boolean; error?: string } {
   const trimmed = text.trim();
   if (!trimmed) return { isValid: false, error: 'The uploaded file is empty.' };
@@ -579,9 +690,10 @@ export function parseResumeTextLocally(text: string, userId = 'local_user'): Pro
 
   const email = text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i)?.[0] || '';
   const phone = text.match(/(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{2,4}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}/)?.[0] || '';
-  const linkedin = text.match(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/(?:in|pub)\/[^\s)]+/i)?.[0] || '';
-  const github = text.match(/(?:https?:\/\/)?(?:www\.)?github\.com\/[^\s)]+/i)?.[0] || '';
-  const website = text.match(/https?:\/\/(?![^\s]*(?:linkedin|github))[^\s)]+/i)?.[0] || '';
+  const urls = extractUrls(text);
+  const linkedin = urls.find(url => /linkedin\.com\/(?:in|pub)\//i.test(url)) || '';
+  const github = urls.find(url => /github\.com\//i.test(url)) || '';
+  const website = urls.find(url => !/linkedin\.com|github\.com/i.test(url)) || '';
   const nameCandidates = headerLines.filter(line =>
     line.length >= 3 && line.length <= 70 && !line.includes('@') && !/\d{3}/.test(line)
   );
@@ -603,7 +715,7 @@ export function parseResumeTextLocally(text: string, userId = 'local_user'): Pro
       profilePhoto: '',
     },
     summary: sections.summary.filter(Boolean).join(' ').trim(),
-    careerObjective: '',
+    careerObjective: sections.summary.filter(Boolean).join(' ').trim(),
     education: parseEducationBlocks(sections.education),
     experience: parseExperienceBlocks(sections.experience, 'experience'),
     internships: parseInternshipBlocks(sections.internships),
@@ -614,6 +726,7 @@ export function parseResumeTextLocally(text: string, userId = 'local_user'): Pro
     volunteering: [],
     languages: [],
     customSections: [],
+    linkDisplayMode: 'embedded',
     updatedAt: new Date().toISOString(),
   };
 }
@@ -623,7 +736,7 @@ export function profileFromResumeData(resume: ResumeData, userId: string): Profi
     uid: userId,
     personalDetails: resume.personalDetails,
     summary: resume.summary,
-    careerObjective: '',
+    careerObjective: resume.summary,
     education: resume.education,
     experience: resume.experience,
     internships: resume.internships || [],
@@ -634,6 +747,7 @@ export function profileFromResumeData(resume: ResumeData, userId: string): Profi
     volunteering: resume.volunteering,
     languages: resume.languages,
     customSections: resume.customSections,
+    linkDisplayMode: resume.linkDisplayMode,
     updatedAt: resume.updatedAt,
   };
 }
@@ -770,8 +884,8 @@ const analyzeFormatting = (
   let score = 100;
   const feedback: string[] = [];
 
-  const headingMatches = SECTION_PATTERNS.filter(([, pattern]) =>
-    rawText.split(/\r?\n/).some(line => pattern.test(line.replace(/[:|]+$/, '').trim()))
+  const headingMatches = (Object.values(SECTION_ALIASES) as RegExp[][]).filter(patterns =>
+    rawText.split(/\r?\n/).some(line => patterns.some(pattern => pattern.test(line.replace(/[:|]+$/, '').trim())))
   ).length;
   if (rawText && headingMatches < 3) {
     score -= 10;
@@ -824,10 +938,18 @@ const analyzeContact = (resume: ProfileData) => {
   return { score: clamp(score), feedback };
 };
 
-const analyzeLinks = (resume: ProfileData) => {
+const analyzeLinks = (resume: ProfileData, rawText = '') => {
   const details = resume.personalDetails;
-  const profileLinks = [details.linkedin, details.github, details.website].filter(value => value.trim()).length;
-  const projectLinkCount = resume.projects.filter(project => project.github || project.live).length;
+  const rawUrls = extractUrls(rawText);
+  const profileLinks = unique([
+    details.linkedin,
+    details.github,
+    details.website,
+    ...rawUrls.filter(url => /linkedin\.com|github\.com/i.test(url)),
+  ].filter(value => value.trim())).length;
+  const projectLinkCount = resume.projects.filter(project => (
+    project.github || project.live || rawUrls.some(url => project.description.includes(url) || project.name.includes(url))
+  )).length;
   const credentialLinkCount = resume.certifications.filter(entry => entry.url).length;
   const possibleProjectLinks = resume.projects.length ? 35 : 0;
   const possibleCredentialLinks = resume.certifications.length ? 15 : 0;
@@ -839,7 +961,7 @@ const analyzeLinks = (resume: ProfileData) => {
       ? credentialLinkCount / resume.certifications.length * possibleCredentialLinks
       : 0);
   const feedback: string[] = [];
-  if (!profileLinks) feedback.push('Add a verified LinkedIn, GitHub, or portfolio link.');
+  if (!profileLinks && rawUrls.length === 0) feedback.push('Add a verified LinkedIn, GitHub, or portfolio link.');
   if (resume.projects.length && !projectLinkCount) feedback.push('Projects have no GitHub or live-demo links.');
   if (resume.certifications.length && !credentialLinkCount) feedback.push('Certifications have no credential links.');
   return { score: clamp(possible ? earned / possible * 100 : 70), feedback };
@@ -1106,10 +1228,22 @@ const analyzeExperience = (resume: ProfileData, jobDescription: string) => {
     endDate: entry.endDate,
     description: entry.description,
   }))];
-  if (!entries.length) {
+  const projectBackedExperience = resume.projects
+    .filter(project => hasRoleLikeProjectEvidence(project))
+    .map(project => ({
+      id: project.id,
+      title: project.name,
+      company: project.technologies || 'Project-based experience',
+      location: '',
+      startDate: '',
+      endDate: '',
+      description: project.description,
+    }));
+  const evidenceEntries = [...entries, ...projectBackedExperience];
+  if (!evidenceEntries.length) {
     return { score: 0, verbs: [], metrics: 0, impacts: 0, relevance: 0, years: 0 };
   }
-  const descriptions = entries.map(entry => entry.description).filter(Boolean);
+  const descriptions = evidenceEntries.map(entry => entry.description).filter(Boolean);
   const text = descriptions.join(' ').toLowerCase();
   const verbs = ACTION_VERBS.filter(verb => hasPhrase(text, verb));
   const metrics = (text.match(
@@ -1125,14 +1259,14 @@ const analyzeExperience = (resume: ProfileData, jobDescription: string) => {
       }, 0) / descriptions.length
     : 35;
   const jdTokens = tokenize(jobDescription).filter(token => token.length > 4 && !STOP_WORDS.has(token));
-  const titleText = entries.map(entry => `${entry.title} ${entry.description}`).join(' ').toLowerCase();
+  const titleText = evidenceEntries.map(entry => `${entry.title} ${entry.description}`).join(' ').toLowerCase();
   const relevantTokens = unique(jdTokens).slice(0, 30);
   const relevance = relevantTokens.length
     ? relevantTokens.filter(token => hasPhrase(titleText, token)).length / relevantTokens.length * 100
     : 70;
   const verbScore = Math.min(100, verbs.length * 12);
   const metricScore = Math.min(100, metrics * 20);
-  const impactScore = Math.min(100, impacts / Math.max(1, entries.length) * 100);
+  const impactScore = Math.min(100, impacts / Math.max(1, evidenceEntries.length) * 100);
   return {
     score: clamp(verbScore * 0.25 + metricScore * 0.3 + impactScore * 0.2 + clarity * 0.15 + relevance * 0.1),
     verbs,
@@ -1162,8 +1296,9 @@ const analyzeProjects = (projects: ProjectEntry[]) => {
     if (techCount >= 2) { score += 25; withTech += 1; }
     else if (techCount === 1) { score += 12; withTech += 1; }
     if (hasOutcome) score += 20;
-    if (project.github) { score += 8; withLinks += 1; }
-    if (project.live) { score += 7; withLinks += project.github ? 0 : 1; }
+    const descriptionLinks = extractUrls(project.description);
+    if (project.github || descriptionLinks.some(url => /github\.com/i.test(url))) { score += 8; withLinks += 1; }
+    if (project.live || descriptionLinks.some(url => !/github\.com/i.test(url))) { score += 7; withLinks += (project.github || descriptionLinks.some(url => /github\.com/i.test(url))) ? 0 : 1; }
     if (genericTodo) score -= 25;
     total += clamp(score);
   });
@@ -1231,12 +1366,19 @@ const analyzeCompleteness = (resume: ProfileData) => {
   const deductions: string[] = [];
   let score = 100;
   const contactComplete = Boolean(resume.personalDetails.fullName && resume.personalDetails.email && resume.personalDetails.phone);
+  const projectExperienceEvidence = resume.projects.some(project => hasRoleLikeProjectEvidence(project));
   if (!contactComplete) { score -= 20; deductions.push('Contact information is incomplete (-20).'); }
   if (!flattenSkills(resume.skills).length) { score -= 20; deductions.push('Skills section is missing (-20).'); }
-  if (!resume.experience.length && !(resume.internships || []).length) { score -= 25; deductions.push('Experience or internships are missing (-25).'); }
+  if (!resume.experience.length && !(resume.internships || []).length && !projectExperienceEvidence) {
+    score -= 25;
+    deductions.push('Experience, internships, or role-structured projects are missing (-25).');
+  }
   if (!resume.education.length) { score -= 15; deductions.push('Education section is missing (-15).'); }
   if (!resume.projects.length) { score -= 10; deductions.push('Projects section is missing (-10).'); }
-  if (!resume.summary) { score -= 5; deductions.push('Professional summary is missing (-5).'); }
+  if (!(resume.summary || resume.careerObjective).trim()) {
+    score -= 5;
+    deductions.push('Professional summary or career objective is missing (-5).');
+  }
   if (!resume.certifications.length && !resume.achievements.length) {
     score -= 5;
     deductions.push('No certifications or achievements are listed (-5).');
@@ -1290,8 +1432,12 @@ const estimatePageFit = (resume: ProfileData) => {
   const usablePageHeight = 760;
   const lineHeight = 11.5;
   let height = 54;
+  let sectionWeight = 0;
   const addSection = (contentHeight: number) => {
-    if (contentHeight > 0) height += 17 + contentHeight + 5;
+    if (contentHeight > 0) {
+      height += 17 + contentHeight + 5;
+      sectionWeight += contentHeight;
+    }
   };
 
   const contactText = [
@@ -1336,27 +1482,128 @@ const estimatePageFit = (resume: ProfileData) => {
 
   const densityRatio = height / usablePageHeight;
   const estimatedPages = Number(Math.max(1, densityRatio).toFixed(2));
-  const fitCategory = densityRatio <= 0.92
+  const fitCategory = densityRatio <= 1.1
     ? 'single-page safe' as const
     : densityRatio <= 1.15
       ? 'near limit' as const
       : 'multi-page likely' as const;
-  const overflowRisk = densityRatio <= 0.92
+  const overflowRisk = densityRatio <= 1.1
     ? 'low' as const
     : densityRatio <= 1.15
       ? 'medium' as const
       : 'high' as const;
-  const score = densityRatio <= 0.92
+  const score = densityRatio <= 1.1
     ? clamp(100 - densityRatio * 10)
     : densityRatio <= 1.15
-      ? clamp(90 - (densityRatio - 0.92) * 130)
+      ? clamp(90 - (densityRatio - 1.1) * 130)
       : clamp(60 - (densityRatio - 1.15) * 35);
 
   return {
     score,
     details: { estimatedPages, fitCategory, overflowRisk },
+    lineDensity: Number((height / lineHeight).toFixed(1)),
+    sectionWeight: Number(sectionWeight.toFixed(1)),
+    densityRatio: Number(densityRatio.toFixed(2)),
   };
 };
+
+const analyzeResponsiveness = (
+  resume: ProfileData,
+  pageFit: ReturnType<typeof estimatePageFit>,
+  templatePlan: ResumeTemplatePlan | null,
+  layoutAnalysis: AtsLayoutAnalysis
+): AtsResponsivenessAnalysis => {
+  const textHeavySections = [
+    resume.summary,
+    ...resume.experience.map(entry => entry.description),
+    ...(resume.internships || []).map(entry => entry.description),
+    ...resume.projects.map(project => project.description),
+    ...resume.achievements,
+  ].filter(Boolean);
+  const longBlocks = textHeavySections.filter(block => tokenize(block).length > 45).length;
+  const longLinks = [
+    resume.personalDetails.linkedin,
+    resume.personalDetails.github,
+    resume.personalDetails.website,
+    ...resume.projects.flatMap(project => [project.github, project.live]),
+    ...resume.certifications.map(cert => cert.url),
+  ].filter(Boolean).filter(value => String(value).length > 38).length;
+  const mobilePenalty =
+    longBlocks * 6 +
+    longLinks * 4 +
+    (templatePlan?.bodyLayout === 'sidebar' ? 20 : 0) +
+    (pageFit.details.estimatedPages > 1.1 ? 10 : 0);
+  const tabletPenalty =
+    longBlocks * 3 +
+    longLinks * 2 +
+    (templatePlan?.bodyLayout === 'sidebar' ? 8 : 0) +
+    (pageFit.details.overflowRisk === 'high' ? 8 : 0);
+  const textOverflowRisk = longBlocks >= 3 || longLinks >= 4
+    ? 'high'
+    : longBlocks >= 1 || longLinks >= 2
+      ? 'medium'
+      : 'low';
+  const columnCollapseRisk = layoutAnalysis.detectedColumns === 'multi'
+    ? (templatePlan?.bodyLayout === 'sidebar' ? 'high' : 'medium')
+    : 'low';
+  const notes = unique([
+    ...(longBlocks > 0 ? [`${longBlocks} dense text block(s) may wrap poorly on small screens.`] : []),
+    ...(longLinks > 0 ? [`${longLinks} long link value(s) may overflow on mobile widths.`] : []),
+    ...(templatePlan?.bodyLayout === 'sidebar'
+      ? ['Sidebar layouts require careful collapse behavior on tablet and mobile widths.']
+      : []),
+  ]);
+  const mobileScore = clamp(100 - mobilePenalty);
+  const tabletScore = clamp(100 - tabletPenalty);
+  return {
+    score: clamp(mobileScore * 0.6 + tabletScore * 0.4),
+    mobileScore,
+    tabletScore,
+    textOverflowRisk,
+    columnCollapseRisk,
+    notes,
+  };
+};
+
+const expectedSectionOrderForTemplate = (templateId?: TemplateId) => {
+  if (!templateId) return [...DEFAULT_SECTION_ORDER];
+  return [...(TEMPLATE_SECTION_PRIORITIES[templateId] || DEFAULT_SECTION_ORDER)];
+};
+
+const buildDiagnosticCategories = (
+  categories: Array<{
+    id: AtsDiagnosticCategoryScore['id'];
+    label: string;
+    score: number;
+    explanation: string;
+  }>,
+  issues: AtsDiagnosticIssue[]
+): AtsDiagnosticCategoryScore[] =>
+  categories.map(category => ({
+    ...category,
+    score: clamp(category.score),
+    issues: issues.filter(issue => {
+      switch (category.id) {
+        case 'contentQuality':
+          return ['content', 'spelling'].includes(issue.category);
+        case 'sectionCompleteness':
+        case 'sectionOrder':
+        case 'hrRiskFlags':
+          return issue.category === 'structure';
+        case 'atsFormatting':
+        case 'layoutStructure':
+          return ['layout', 'atsRules'].includes(issue.category);
+        case 'keywordsMatch':
+        case 'tailoringScore':
+        case 'seniorityFit':
+          return issue.category === 'content' || issue.category === 'atsRules';
+        case 'responsivenessScore':
+          return issue.category === 'responsiveness';
+        default:
+          return false;
+      }
+    }).map(issue => issue.id),
+  }));
 
 export function analyzeAtsLocally(
   resume: ProfileData,
@@ -1366,6 +1613,8 @@ export function analyzeAtsLocally(
     sourceKind?: AtsSourceKind;
     templateId?: TemplateId;
     hiddenSections?: string[];
+    languageQuality?: ResumeData['languageQuality'];
+    sectionOrder?: string[];
   } = {}
 ): LocalAtsResult {
   const sourceKind = options.sourceKind || 'structured';
@@ -1377,7 +1626,7 @@ export function analyzeAtsLocally(
   const weightedKeywords = buildWeightedKeywords(jobDescription, sections, roleFamily);
   const formatting = analyzeFormatting(resume, sourceText, sectionFeedback, sourceKind);
   const contact = analyzeContact(resume);
-  const links = analyzeLinks(resume);
+  const links = analyzeLinks(resume, sourceText);
   const keywords = hasJobDescription
     ? analyzeKeywords(weightedKeywords, sections)
     : analyzeGeneralKeywords(resume, sections);
@@ -1399,7 +1648,9 @@ export function analyzeAtsLocally(
   const completeness = analyzeCompleteness(resume);
   const evidenceStrength = analyzeEvidenceStrength(resume, sections, experience, projects);
   const pageFit = estimatePageFit(resume);
+  const languageQuality = options.languageQuality;
   const templatePlan = options.templateId ? resumeTemplatePlans[options.templateId] : null;
+  const templateRule = templatePlan ? resumeFamilyRules[templatePlan.family] : null;
   const skillsVisible = !options.hiddenSections?.includes('skills');
   const skillPlacement = templatePlan?.bodyLayout === 'sidebar' ? 'sidebar' : 'main';
 
@@ -1417,7 +1668,7 @@ export function analyzeAtsLocally(
     skills: skillsVisible ? generalSkills.score : 0,
     experience: experience.score,
     projects: projects.score,
-    readability: readability.score,
+    readability: clamp(languageQuality ? readability.score * 0.65 + languageQuality.score * 0.35 : readability.score),
   };
   // General ATS readiness weights: 20/10/15/15/15/10/15. Page fit and JD data are excluded.
   const atsScore = clamp(
@@ -1498,6 +1749,9 @@ export function analyzeAtsLocally(
     ...(hasJobDescription && keywords.stuffingPenalty > 0
       ? ['Repeated target terms without strong section evidence were discounted as possible keyword stuffing.']
       : []),
+    ...(languageQuality?.summary.total
+      ? [`Language review found ${languageQuality.summary.total} live issue(s), including ${languageQuality.summary.spelling} spelling and ${languageQuality.summary.grammar} grammar concerns.`]
+      : []),
   ]);
   const strongestTargetEvidence = roleMatch.strongEvidence[0]?.split(' in ')[0] || '';
   const highestPriorityGap = missingKeywords[0] || '';
@@ -1516,6 +1770,9 @@ export function analyzeAtsLocally(
     ...(hasJobDescription && targetSkills.missing.length
       ? ['Add only missing skills that are genuinely supported by your experience or projects.']
       : []),
+    ...(languageQuality?.summary.total
+      ? ['Resolve spelling, grammar, and clarity suggestions before exporting to improve ATS readability and recruiter trust.']
+      : []),
   ]).slice(0, 8);
   const missingItems = completeness.deductions.map(item => item.replace(/\s*\(-\d+\)\.?$/, '.'));
   const strengths = unique([
@@ -1524,6 +1781,7 @@ export function analyzeAtsLocally(
     ...(generalSkills.score >= 70 ? ['Skills are supported across multiple categories or evidence sections.'] : []),
     ...(experience.score >= 70 ? ['Experience uses measurable impact and strong action language.'] : []),
     ...(projects.score >= 70 ? ['Projects include useful technical detail and outcome evidence.'] : []),
+    ...(languageQuality && languageQuality.score >= 92 ? ['Language quality is clean and ATS-ready across the current resume content.'] : []),
     ...strongCoverage.slice(0, 4).map(keyword => `${keyword} has strong target-role evidence.`),
   ]).slice(0, 6);
   const positionalKeywords = hasJobDescription
@@ -1580,6 +1838,329 @@ export function analyzeAtsLocally(
     },
   ];
 
+  const languageAnalysis: AtsLanguageAnalysis = {
+    spellingAccuracy: clamp(
+      languageQuality
+        ? 100 - languageQuality.summary.spelling * 12 - languageQuality.summary.highSeverity * 4
+        : breakdown.readability
+    ),
+    grammarCorrectness: clamp(
+      languageQuality
+        ? 100 - languageQuality.summary.grammar * 10 - readability.grammarIssues * 4
+        : breakdown.readability
+    ),
+    readability: clamp(readability.score),
+    clarity: clamp(100 - readability.longParagraphs * 12 - readability.repeatedPhrases * 10 - readability.buzzwordCount * 5),
+  };
+
+  const layoutAnalysis: AtsLayoutAnalysis = {
+    estimatedLineDensity: pageFit.lineDensity,
+    sectionSizeWeight: pageFit.sectionWeight,
+    templateScalingFactor: Number(
+      (templatePlan?.density === 'dense' ? 0.92 : templatePlan?.density === 'compact' ? 1 : 1.08).toFixed(2)
+    ),
+    expectedColumns: templateRule?.singleColumn ? 'single' : 'flexible',
+    detectedColumns: templatePlan?.bodyLayout === 'sidebar' ? 'multi' : 'single',
+  };
+  const responsivenessAnalysis = analyzeResponsiveness(resume, pageFit, templatePlan, layoutAnalysis);
+
+  const diagnosticIssues: AtsDiagnosticIssue[] = [];
+  const pushIssue = (issue: AtsDiagnosticIssue | null) => {
+    if (!issue) return;
+    if (!diagnosticIssues.some(existing => existing.id === issue.id)) diagnosticIssues.push(issue);
+  };
+
+  if (!resume.personalDetails.fullName.trim() || !validEmail(resume.personalDetails.email) || !validPhone(resume.personalDetails.phone)) {
+    pushIssue(createDiagnosticIssue({
+      title: 'Missing or invalid contact information',
+      severity: 'high',
+      category: 'structure',
+      affectedSection: 'Header',
+      explanation: 'Essential contact fields are incomplete or invalid, which can block recruiter follow-up and ATS parsing confidence.',
+      suggestedFix: 'Provide a valid full name, professional email, and phone number in the header.',
+      location: 'personalDetails',
+      impact: 14,
+    }));
+  }
+
+  if (!(resume.summary || resume.careerObjective).trim()) {
+    pushIssue(createDiagnosticIssue({
+      title: 'Professional summary is missing',
+      severity: 'medium',
+      category: 'structure',
+      affectedSection: 'Summary',
+      explanation: 'A missing professional summary or career objective weakens section completeness and removes quick context for recruiters.',
+      suggestedFix: 'Add a concise summary or career objective focused on role fit, core skills, and measurable value.',
+      location: 'summary/careerObjective',
+      impact: 5,
+    }));
+  }
+
+  if (!flattenSkills(resume.skills).length) {
+    pushIssue(createDiagnosticIssue({
+      title: 'Skills section is missing or empty',
+      severity: 'high',
+      category: 'structure',
+      affectedSection: 'Skills',
+      explanation: 'ATS tools depend on explicit skills indexing. An empty skills section lowers match quality and completeness.',
+      suggestedFix: 'Add role-relevant skills grouped under the skills section using genuine experience-backed terms.',
+      location: 'skills',
+      impact: 20,
+    }));
+  }
+
+  if (!resume.experience.length && !(resume.internships || []).length && !resume.projects.some(project => hasRoleLikeProjectEvidence(project))) {
+    pushIssue(createDiagnosticIssue({
+      title: 'Experience evidence is missing',
+      severity: 'high',
+      category: 'structure',
+      affectedSection: 'Experience',
+      explanation: 'No experience or internship entries were found, which strongly reduces ATS confidence and seniority assessment.',
+      suggestedFix: 'Add work experience, internships, or equivalent role-based evidence with measurable outcomes.',
+      location: 'experience',
+      impact: 25,
+    }));
+  }
+
+  const providedOrder = (options.sectionOrder || []).filter(Boolean);
+  if (options.templateId && providedOrder.length > 0) {
+    const expectedOrder = expectedSectionOrderForTemplate(options.templateId).filter(sectionId => (
+      ['summary', 'skills', 'experience', 'projects', 'education', 'certifications'].includes(sectionId)
+    ));
+    const actualOrder = providedOrder.filter(sectionId => expectedOrder.includes(sectionId));
+    const mismatches = actualOrder.reduce((count, sectionId, index) => (
+      expectedOrder[index] && expectedOrder[index] !== sectionId ? count + 1 : count
+    ), 0);
+    if (mismatches > 0) {
+      pushIssue(createDiagnosticIssue({
+        title: 'Section order does not match the recommended ATS flow',
+        severity: mismatches >= 2 ? 'high' : 'medium',
+        category: 'structure',
+        affectedSection: 'Section Order',
+        explanation: `The current order (${actualOrder.join(' -> ')}) deviates from the template-aware ATS recommendation (${expectedOrder.join(' -> ')}).`,
+        suggestedFix: 'Move summary, skills, experience, projects, and education into the recommended order for this template.',
+        location: 'sectionOrder',
+        impact: mismatches >= 2 ? 10 : 6,
+      }));
+    }
+  }
+
+  if (templateRule?.singleColumn && layoutAnalysis.detectedColumns === 'multi') {
+    pushIssue(createDiagnosticIssue({
+      title: 'Multi-column layout conflicts with ATS-safe structure',
+      severity: options.templateId === 'atsFriendly' ? 'high' : 'medium',
+      category: 'layout',
+      affectedSection: 'Layout',
+      explanation: 'This template configuration is expected to remain single-column for maximum ATS extraction reliability.',
+      suggestedFix: 'Use a single-column ATS-safe template or switch to a layout with linear reading order.',
+      location: 'template.layout',
+      impact: options.templateId === 'atsFriendly' ? 12 : 7,
+    }));
+  }
+
+  if (options.templateId === 'softwareEngineer' && flattenSkills(resume.skills).length > 18) {
+    pushIssue(createDiagnosticIssue({
+      title: 'Skills layout structure issue',
+      severity: 'medium',
+      category: 'layout',
+      affectedSection: 'Skills',
+      explanation: 'The software developer template can become visually fragmented when too many skills are packed into grouped columns.',
+      suggestedFix: 'Reduce redundant skills or rebalance them into clear grouped rows so the section remains scanable and ATS-safe.',
+      location: 'skills',
+      impact: 6,
+    }));
+  }
+
+  if (!skillsVisible) {
+    pushIssue(createDiagnosticIssue({
+      title: 'Skills section is hidden',
+      severity: 'high',
+      category: 'atsRules',
+      affectedSection: 'Skills',
+      explanation: 'Hiding the skills section removes explicit keyword evidence from the rendered resume.',
+      suggestedFix: 'Make the skills section visible before exporting or scanning against a job description.',
+      location: 'hiddenSections.skills',
+      impact: 12,
+    }));
+  }
+
+  if (pageFit.details.overflowRisk !== 'low') {
+    pushIssue(createDiagnosticIssue({
+      title: 'Page overflow risk detected',
+      severity: pageFit.details.overflowRisk === 'high' ? 'high' : 'medium',
+      category: 'layout',
+      affectedSection: 'Layout',
+      explanation: `Estimated page count is ${pageFit.details.estimatedPages}, which indicates ${pageFit.details.fitCategory}.`,
+      suggestedFix: 'Shorten dense sections, reduce repetitive bullets, or switch to a multi-page strategy when appropriate.',
+      location: 'pageFit',
+      impact: pageFit.details.overflowRisk === 'high' ? 10 : 5,
+    }));
+  }
+
+  if (responsivenessAnalysis.textOverflowRisk !== 'low') {
+    pushIssue(createDiagnosticIssue({
+      title: 'Small-screen text overflow risk detected',
+      severity: responsivenessAnalysis.textOverflowRisk === 'high' ? 'high' : 'medium',
+      category: 'responsiveness',
+      affectedSection: 'Responsive Layout',
+      explanation: 'Long text blocks or long links may wrap poorly on mobile or narrow tablet layouts.',
+      suggestedFix: 'Shorten dense paragraphs, trim visible URLs when raw mode is enabled, or split long content into tighter bullets.',
+      location: 'responsive.text',
+      impact: responsivenessAnalysis.textOverflowRisk === 'high' ? 8 : 4,
+    }));
+  }
+
+  if (responsivenessAnalysis.columnCollapseRisk !== 'low') {
+    pushIssue(createDiagnosticIssue({
+      title: 'Column collapse behavior needs review',
+      severity: responsivenessAnalysis.columnCollapseRisk === 'high' ? 'high' : 'medium',
+      category: 'responsiveness',
+      affectedSection: 'Responsive Layout',
+      explanation: 'The current template layout may require aggressive stacking or collapse logic on tablet and mobile screens.',
+      suggestedFix: 'Prefer single-column ATS-safe layouts or verify that sidebar content stacks cleanly below the main column.',
+      location: 'responsive.columns',
+      impact: responsivenessAnalysis.columnCollapseRisk === 'high' ? 7 : 3,
+    }));
+  }
+
+  if (languageQuality) {
+    languageQuality.issues.forEach(issue => {
+      pushIssue(createDiagnosticIssue({
+        title: `${issueCategoryLabel(issue.category === 'duplicate' ? 'content' : issue.category === 'consistency' ? 'content' : issue.category as AtsIssueCategory)} issue`,
+        severity: issue.severity,
+        category: issue.category === 'spelling'
+          ? 'spelling'
+          : issue.category === 'grammar' || issue.category === 'clarity' || issue.category === 'duplicate' || issue.category === 'consistency'
+            ? 'content'
+            : 'content',
+        affectedSection: issue.sectionKey,
+        explanation: issue.message,
+        suggestedFix: issue.suggestions[0]?.label || 'Review the flagged text and apply a clearer, corrected version.',
+        location: issue.path,
+        impact: issue.severity === 'high' ? 4 : issue.severity === 'medium' ? 2 : 1,
+      }));
+    });
+  }
+
+  if (hasJobDescription && missingKeywords.length > 0) {
+    pushIssue(createDiagnosticIssue({
+      title: 'Important target keywords are missing',
+      severity: missingKeywords.length >= 5 ? 'high' : 'medium',
+      category: 'content',
+      affectedSection: 'Keywords',
+      explanation: `The resume is missing supported evidence for terms such as ${missingKeywords.slice(0, 5).join(', ')}.`,
+      suggestedFix: 'Add only truthful, experience-backed keywords in summary, skills, experience, or projects.',
+      location: 'keywords',
+      impact: Math.min(14, missingKeywords.length * 2),
+    }));
+  }
+
+  if (experience.years > 0 && hasJobDescription) {
+    const jdSeniorityExpectation = /\b(?:senior|lead|principal|staff|manager|8\+ years|10\+ years)\b/i.test(jobDescription)
+      ? 8
+      : /\b(?:mid[-\s]?level|3\+ years|4\+ years|5\+ years)\b/i.test(jobDescription)
+        ? 4
+        : 1;
+    if (experience.years + 1 < jdSeniorityExpectation) {
+      pushIssue(createDiagnosticIssue({
+        title: 'Seniority fit appears below target level',
+        severity: jdSeniorityExpectation >= 8 ? 'high' : 'medium',
+        category: 'content',
+        affectedSection: 'Experience',
+        explanation: `Experience evidence suggests about ${experience.years} years, while the target role appears to expect around ${jdSeniorityExpectation}+ years.`,
+        suggestedFix: 'Strengthen recent senior-level scope, leadership evidence, or target a role aligned with the current experience level.',
+        location: 'experience',
+        impact: jdSeniorityExpectation >= 8 ? 10 : 6,
+      }));
+    }
+  }
+
+  const contentQualityScore = clamp(
+    languageAnalysis.spellingAccuracy * 0.25 +
+    languageAnalysis.grammarCorrectness * 0.25 +
+    languageAnalysis.readability * 0.25 +
+    languageAnalysis.clarity * 0.25
+  );
+  const sectionOrderScore = clamp(100 - diagnosticIssues
+    .filter(issue => issue.affectedSection === 'Section Order')
+    .reduce((sum, issue) => sum + issue.impact, 0));
+  const formattingScore = clamp(formatting.score * 0.7 + breakdown.contact * 0.1 + links.score * 0.2);
+  const layoutStructureScore = clamp(pageFit.score * 0.55 + (layoutAnalysis.detectedColumns === 'single' ? 100 : 70) * 0.2 + (templateRule?.singleColumn ? 100 : 85) * 0.25);
+  const hrRiskScore = clamp(100 - diagnosticIssues
+    .filter(issue => issue.severity === 'high')
+    .reduce((sum, issue) => sum + issue.impact, 0));
+  const seniorityFitScore = hasJobDescription
+    ? clamp(experience.score * 0.5 + (matchScore || 0) * 0.25 + roleMatch.roleScore * 0.25)
+    : clamp(experience.score * 0.7 + breakdown.completeness * 0.3);
+  const tailoringScore = hasJobDescription
+    ? clamp((matchScore || 0) * 0.5 + keywords.score * 0.3 + targetSkills.relevance * 0.2)
+    : clamp(generalSkills.score * 0.6 + experience.score * 0.4);
+
+  const diagnosticCategories = buildDiagnosticCategories([
+    {
+      id: 'contentQuality',
+      label: 'Content Quality',
+      score: contentQualityScore,
+      explanation: 'Language quality combines spelling accuracy, grammar correctness, readability, and clarity.',
+    },
+    {
+      id: 'sectionCompleteness',
+      label: 'Section Completeness',
+      score: breakdown.completeness,
+      explanation: 'Checks whether essential resume sections and contact details are present and populated.',
+    },
+    {
+      id: 'sectionOrder',
+      label: 'Section Order',
+      score: sectionOrderScore,
+      explanation: 'Compares the current order against a template-aware ATS recommendation.',
+    },
+    {
+      id: 'atsFormatting',
+      label: 'ATS Formatting',
+      score: formattingScore,
+      explanation: 'Evaluates text extraction safety, heading consistency, icons, tables, and link presence.',
+    },
+    {
+      id: 'keywordsMatch',
+      label: 'Keywords Match',
+      score: hasJobDescription ? keywords.score : generalSkills.score,
+      explanation: hasJobDescription
+        ? 'Measures supported overlap between resume evidence and job-description terminology.'
+        : 'Measures how well explicit skills are represented and reinforced in the resume.',
+    },
+    {
+      id: 'layoutStructure',
+      label: 'Layout Structure',
+      score: layoutStructureScore,
+      explanation: 'Evaluates page density, overflow risk, and whether the template layout remains ATS-safe.',
+    },
+    {
+      id: 'hrRiskFlags',
+      label: 'HR Risk Flags',
+      score: hrRiskScore,
+      explanation: 'Flags issues likely to reduce recruiter confidence, such as missing contact data or major language errors.',
+    },
+    {
+      id: 'seniorityFit',
+      label: 'Seniority Fit',
+      score: seniorityFitScore,
+      explanation: 'Compares the depth of experience evidence against the expected level of the target role.',
+    },
+    {
+      id: 'tailoringScore',
+      label: 'Tailoring Score',
+      score: tailoringScore,
+      explanation: 'Measures how specifically the resume is aligned to the target role or to a coherent resume narrative.',
+    },
+    {
+      id: 'responsivenessScore',
+      label: 'Responsiveness Score',
+      score: responsivenessAnalysis.score,
+      explanation: 'Evaluates mobile and tablet adaptability, including wrapping risk, column collapse behavior, and small-screen readability.',
+    },
+  ], diagnosticIssues);
+
   return {
     atsScore,
     matchScore,
@@ -1634,5 +2215,10 @@ export function analyzeAtsLocally(
     missingItems,
     warnings,
     recommendations,
+    diagnosticCategories,
+    diagnosticIssues,
+    languageAnalysis,
+    layoutAnalysis,
+    responsivenessAnalysis,
   };
 }

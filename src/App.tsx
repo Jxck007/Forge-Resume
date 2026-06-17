@@ -16,6 +16,7 @@ import {
 import { aiParseResume } from './services/groq';
 import { ResumeData, UserSettings, ProfileData, TemplateId } from './types';
 import { normalizeResume } from './utils';
+import { refreshResumeLanguageQuality } from './utils/languageQuality';
 import Header from './components/Header';
 import Auth from './components/Auth';
 import Dashboard from './components/Dashboard';
@@ -290,8 +291,9 @@ export default function App() {
       triggerToast('Cannot save while offline.', 'error');
       return;
     }
+    const nextResume = refreshResumeLanguageQuality(updated);
     // Update local resumes state instantly to update live preview instantly
-    setResumes(prev => prev.map(r => (r.id === updated.id ? updated : r)));
+    setResumes(prev => prev.map(r => (r.id === nextResume.id ? nextResume : r)));
 
     // Clear previous save debouncer ref
     if (saveTimeoutRef.current) {
@@ -301,7 +303,7 @@ export default function App() {
     setSaving(true);
     saveTimeoutRef.current = setTimeout(async () => {
       try {
-        await updateResumeInDb(updated.id, updated);
+        await updateResumeInDb(nextResume.id, nextResume);
       } catch {
         triggerToast('Auto save synchronization failed.', 'error');
       } finally {
