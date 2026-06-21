@@ -23,7 +23,7 @@ import {
 import ConfirmationDialog from './ConfirmationDialog';
 import { extractResumeText, getImportAccept, ResumeImportMode, validateImportFile } from '../utils/resumeImport';
 import { assessResumeImport, ReviewedImport } from '../utils/aiImportQuality';
-import TemplateShowcase, { TEMPLATE_LABELS } from './TemplateShowcase';
+import TemplateShowcase, { TEMPLATE_IDS, TEMPLATE_LABELS } from './TemplateShowcase';
 import ActionMenu from './ActionMenu';
 import { useAiSession } from '../contexts/AiSessionContext';
 
@@ -214,34 +214,54 @@ export default function Dashboard({
     setLoadingAction(true);
     setImportStatus('Preparing import...');
     try {
-      if (importMode !== 'text') {
-        showToasts('This beta currently supports pasted text only. PDF, DOCX, and image import will return later.', 'info');
-        return;
+      let rawText = '';
+      let sourceLabel = 'resume text';
+
+      if (importMode === 'text') {
+        rawText = pastedText.trim();
+        if (!rawText) {
+          showToasts('Please paste the resume text before importing.', 'info');
+          return;
+        }
+      } else {
+        if (!importFile) {
+          showToasts(`Please upload a ${importMode.toUpperCase()} file first.`, 'info');
+          return;
+        }
+        const validationError = validateImportFile(importFile, importMode);
+        if (validationError) {
+          showToasts(validationError, 'error');
+          return;
+        }
+        sourceLabel = `${importMode.toUpperCase()} file`;
+        setImportStatus(`Extracting text from ${importMode.toUpperCase()}...`);
+        rawText = await extractResumeText(importFile, importMode);
+        if (!rawText.trim()) {
+          showToasts('No readable text was extracted from the selected file.', 'error');
+          return;
+        }
       }
 
-      const rawText = pastedText.trim();
-
-      if (!rawText) {
-        showToasts('No readable resume text was found. Try another file or paste text.', 'error');
-        return;
-      }
-
-      showToasts('Structuring pasted resume text with AI...', 'info');
+      const titleFromFile = importFile?.name.replace(/\.[^.]+$/, '') || '';
+      setImportTitle(prev => prev || titleFromFile || 'Imported Resume');
+      showToasts(`Structuring ${sourceLabel} with AI...`, 'info');
       setImportStatus('Verifying extracted information...');
+
       const result = await generate({
         task: 'import_text_resume',
         input: rawText,
         tone: 'professional',
         maxOutputTokens: 1200,
       });
-      if (!mountedRef.current || importSourceRef.current.trim() !== rawText) return;
+      if (!mountedRef.current) return;
       const cleanedResult = result.text.trim().replace(/^```json\s*/i, '').replace(/^```/, '').replace(/```$/, '').trim();
       setReviewData(assessResumeImport(JSON.parse(cleanedResult), rawText));
       setImportStatus('Ready for review');
-      setImportTitle('Imported Resume');
-    } catch {
+      if (!importTitle) setImportTitle(titleFromFile || 'Imported Resume');
+    } catch (error) {
       if (mountedRef.current) {
-        showToasts('Resume import could not be completed. Check the pasted text and AI connection, then try again.', 'error');
+        console.error(error);
+        showToasts('Resume import could not be completed. Check the source and AI connection, then try again.', 'error');
       }
     } finally {
       importInProgressRef.current = false;
@@ -661,6 +681,21 @@ export default function Dashboard({
                   />
                 </div>}
 
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                    Template
+                  </label>
+                  <select
+                    value={newTemplate}
+                    onChange={event => setNewTemplate(event.target.value as TemplateId)}
+                    className="w-full rounded-xl border border-[#2A2E37] bg-[#0F1115] px-4 py-2.5 text-sm text-white outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10 transition-all"
+                  >
+                    {TEMPLATE_IDS.map(templateId => (
+                      <option key={templateId} value={templateId}>{TEMPLATE_LABELS[templateId]}</option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-3 text-sm text-zinc-300">
                   Selected template: <strong className="text-white">{TEMPLATE_LABELS[newTemplate]}</strong>
                 </div>
@@ -724,181 +759,189 @@ export default function Dashboard({
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-6">
-                {loadingAction && (
-                  <div className="mb-5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-                    <div className="flex items-center gap-3 text-xs font-semibold text-emerald-200" role="status" aria-live="polite">
-                      <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
-                      <span>{importStatus || 'Reading your resume…'}</span>
+              {!reviewData ? (
+                <div className="space-y-5">
+                  <div className="flex flex-col gap-4 border-y border-[#2A2E37] px-6 py-5 sm:flex-row sm:items-end sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Import target</p>
+                      <p className="mt-1 text-sm text-zinc-300">Select the template this imported resume should use.</p>
                     </div>
-                  </div>
-                )}
-                {!reviewData ? (
-                  <div className="space-y-5">
-                    {isGuestMode && (
-                      <div className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-5 text-sm text-zinc-300">
-                        <p className="font-semibold text-white">Sign in to import a resume</p>
-                        <p className="mt-2 text-zinc-400">
-                          Guest import stays manual. Sign in to use Forge Free Beta AI or connect BYOK for pasted-text import.
-                        </p>
-                        <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              resetImport();
-                              openBlankCreateDialog();
-                            }}
-                            className="rounded-xl bg-[#72DFCA] px-4 py-2 text-sm font-semibold text-[#08110F] transition hover:bg-[#91E8D7]"
-                          >
-                            Start Blank
-                          </button>
-                          <button
-                            type="button"
-                            onClick={onRequestSignIn}
-                            className="rounded-xl border border-[#2A2E37] bg-[#171A21] px-4 py-2 text-sm font-semibold text-zinc-200 transition hover:border-zinc-600 hover:bg-[#1A1F27]"
-                          >
-                            Sign In
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {!isGuestMode && !assistedImportAvailable && (
-                      <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm font-medium text-amber-300">
-                        <p>Assisted import needs Forge Free Beta AI or a connected BYOK provider.</p>
-                        <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              resetImport();
-                              onOpenAiAssist?.();
-                            }}
-                            className="rounded-xl bg-[#72DFCA] px-4 py-2 text-sm font-semibold text-[#08110F] transition hover:bg-[#91E8D7]"
-                          >
-                            Open AI Assist
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              resetImport();
-                              openBlankCreateDialog();
-                            }}
-                            className="rounded-xl border border-[#2A2E37] bg-[#171A21] px-4 py-2 text-sm font-semibold text-zinc-200 transition hover:border-zinc-600 hover:bg-[#1A1F27]"
-                          >
-                            Create manually
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {!isGuestMode && assistedImportAvailable && <><div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {[
-                        { id: 'pdf' as const, label: 'Upload PDF', icon: FileText },
-                        { id: 'docx' as const, label: 'Upload DOCX', icon: FileDown },
-                        { id: 'image' as const, label: 'Upload Image', icon: ImageIcon },
-                        { id: 'text' as const, label: 'Paste Text', icon: ClipboardList },
-                      ].map(option => (
-                        <button
-                          key={option.id}
-                          type="button"
-                          onClick={() => selectImportMode(option.id)}
-                          disabled={loadingAction || (assistedImportAvailable && option.id !== 'text')}
-                          className={`flex min-h-24 flex-col items-center justify-center gap-2 rounded-xl border p-3 text-xs font-bold transition ${
-                            importMode === option.id
-                              ? 'border-emerald-400 bg-emerald-400/10 text-emerald-200'
-                              : 'border-zinc-700 bg-zinc-900/40 text-zinc-400 hover:border-zinc-600 hover:text-white'
-                          }`}
-                        >
-                          <option.icon className="h-5 w-5" />
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    {importMode === 'text' ? (
-                      <div>
-                        <label className="mb-1.5 block text-xs font-semibold text-zinc-300">
-                          Resume text for AI import
-                        </label>
-                        <textarea
-                          value={pastedText}
-                          onChange={event => setPastedText(event.target.value)}
-                          rows={10}
-                          maxLength={12000}
-                          placeholder="Paste resume content here..."
-                          className="w-full resize-none rounded-xl border border-[#2A2E37] bg-[#0F1115] p-4 font-mono text-sm text-zinc-300 outline-none transition placeholder:text-zinc-600 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10"
-                        />
-                        <p className="mt-1 text-right text-[10px] text-zinc-500">{pastedText.length}/12,000</p>
-                      </div>
-                    ) : (
-                      <div>
-                        {assistedImportAvailable ? (
-                          <div className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-5 text-sm text-zinc-300">
-                            This beta currently supports pasted text only. PDF, DOCX, and image import will return after the import boundary is hardened.
-                          </div>
-                        ) : (
-                        <>
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          accept={getImportAccept(importMode)}
-                          onChange={event => setImportFile(event.target.files?.[0] || null)}
-                          className="hidden"
-                        />
-                      <button
-                        type="button"
-                          onClick={() => fileInputRef.current?.click()}
-                          className="flex min-h-40 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-700 bg-zinc-900/30 p-6 text-center transition hover:border-emerald-400/70"
+                    <div className="w-full sm:w-1/2">
+                      <select
+                        value={newTemplate}
+                        onChange={event => setNewTemplate(event.target.value as TemplateId)}
+                        className="w-full rounded-xl border border-[#2A2E37] bg-[#0F1115] px-4 py-2.5 text-sm text-white outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10 transition-all"
                       >
-                        <Upload className="mb-3 h-7 w-7 text-emerald-300" />
-                        <strong className="text-sm text-white">
-                          {importFile ? importFile.name : `Choose ${importMode.toUpperCase()} file`}
-                        </strong>
-                        <span className="mt-1 text-xs text-zinc-500">
-                          {importMode === 'pdf' && 'Text extraction uses PDF.js'}
-                          {importMode === 'docx' && 'Text extraction uses Mammoth.js'}
-                          {importMode === 'image' && 'OCR uses Tesseract.js · JPG, PNG, or WEBP'}
-                        </span>
-                        {!importFile && (
-                          <span className="mt-2 text-[11px] text-zinc-400">
-                            No file selected yet.
-                          </span>
-                        )}
-                      </button>
-                      </>
-                        )}
-                      </div>
-                    )}</>}
-                  </div>
-                ) : (
-                  <div className="space-y-5">
-                    <div className="flex items-center justify-between rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
-                      <div>
-                        <p className="text-xs font-bold uppercase tracking-wider text-emerald-200">Import confidence</p>
-                        <p className="mt-0.5 text-xs text-zinc-500">
-                          {reviewData.confidence.rejectedFields} unsupported fields excluded
-                        </p>
-                      </div>
-                      <span className="rounded-full bg-emerald-400/15 px-3 py-1 text-sm font-black text-emerald-300">
-                        {reviewData.confidence.overall}%
-                      </span>
+                        {TEMPLATE_IDS.map(templateId => (
+                          <option key={templateId} value={templateId}>{TEMPLATE_LABELS[templateId]}</option>
+                        ))}
+                      </select>
                     </div>
-                    <label className="block">
-                      <span className="mb-1.5 block text-xs font-semibold text-zinc-300">Resume name</span>
-                      <input
-                        type="text"
-                        value={importTitle}
-                        onChange={event => setImportTitle(event.target.value)}
-                        maxLength={100}
-                        placeholder="e.g., Frontend Engineer — Acme"
-                        className="w-full rounded-xl border border-[#2A2E37] bg-[#0F1115] px-4 py-2.5 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10"
-                        autoFocus
-                      />
-                      <span className="mt-1.5 block text-xs text-zinc-500">Use any name that helps identify this version. AI does not choose it for you.</span>
-                    </label>
-                    <div className="space-y-2">
-                      {reviewSections.map(section => {
-                        const confidence = reviewData.confidence.sections[reviewConfidenceKey[section.label]];
-                        return (
+                  </div>
+
+                  {isGuestMode ? (
+                    <div className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-5 text-sm text-zinc-300">
+                      <p className="font-semibold text-white">Guest import stays manual.</p>
+                      <p className="mt-2 text-zinc-400">Sign in to use Forge Free Beta AI or connect BYOK for pasted-text import.</p>
+                      <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            resetImport();
+                            openBlankCreateDialog();
+                          }}
+                          className="rounded-xl bg-[#72DFCA] px-4 py-2 text-sm font-semibold text-[#08110F] transition hover:bg-[#91E8D7]"
+                        >
+                          Start Blank
+                        </button>
+                        <button
+                          type="button"
+                          onClick={onRequestSignIn}
+                          className="rounded-xl border border-[#2A2E37] bg-[#171A21] px-4 py-2 text-sm font-semibold text-zinc-200 transition hover:border-zinc-600 hover:bg-[#1A1F27]"
+                        >
+                          Sign In
+                        </button>
+                      </div>
+                    </div>
+                  ) : !assistedImportAvailable ? (
+                    <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm font-medium text-amber-300">
+                      <p>Assisted import needs Forge Free Beta AI or a connected BYOK provider.</p>
+                      <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            resetImport();
+                            onOpenAiAssist?.();
+                          }}
+                          className="rounded-xl bg-[#72DFCA] px-4 py-2 text-sm font-semibold text-[#08110F] transition hover:bg-[#91E8D7]"
+                        >
+                          Open AI Assist
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            resetImport();
+                            openBlankCreateDialog();
+                          }}
+                          className="rounded-xl border border-[#2A2E37] bg-[#171A21] px-4 py-2 text-sm font-semibold text-zinc-200 transition hover:border-zinc-600 hover:bg-[#1A1F27]"
+                        >
+                          Create manually
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-5">
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {[
+                          { id: 'pdf' as const, label: 'Upload PDF', icon: FileText },
+                          { id: 'docx' as const, label: 'Upload DOCX', icon: FileDown },
+                          { id: 'image' as const, label: 'Upload Image', icon: ImageIcon },
+                          { id: 'text' as const, label: 'Paste Text', icon: ClipboardList },
+                        ].map(option => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            onClick={() => selectImportMode(option.id)}
+                            disabled={loadingAction}
+                            className={`flex min-h-24 flex-col items-center justify-center gap-2 rounded-xl border p-3 text-xs font-bold transition ${
+                              importMode === option.id
+                                ? 'border-emerald-400 bg-emerald-400/10 text-emerald-200'
+                                : 'border-zinc-700 bg-zinc-900/40 text-zinc-400 hover:border-zinc-600 hover:text-white'
+                            }`}
+                          >
+                            <option.icon className="h-5 w-5" />
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {importMode === 'text' ? (
+                        <div>
+                          <label className="mb-1.5 block text-xs font-semibold text-zinc-300">
+                            Resume text for AI import
+                          </label>
+                          <textarea
+                            value={pastedText}
+                            onChange={event => setPastedText(event.target.value)}
+                            rows={10}
+                            maxLength={12000}
+                            placeholder="Paste resume content here..."
+                            className="w-full resize-none rounded-xl border border-[#2A2E37] bg-[#0F1115] p-4 font-mono text-sm text-zinc-300 outline-none transition placeholder:text-zinc-600 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10"
+                          />
+                          <p className="mt-1 text-right text-[10px] text-zinc-500">{pastedText.length}/12,000</p>
+                        </div>
+                      ) : (
+                        <div>
+                          {assistedImportAvailable ? (
+                            <div className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-5 text-sm text-zinc-300">
+                              This beta currently supports pasted text only. PDF, DOCX, and image import will return after the import boundary is hardened.
+                            </div>
+                          ) : (
+                            <>
+                              <input
+                                ref={fileInputRef}
+                                type="file"
+                                accept={getImportAccept(importMode)}
+                                onChange={event => setImportFile(event.target.files?.[0] || null)}
+                                className="hidden"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => fileInputRef.current?.click()}
+                                className="flex min-h-40 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-700 bg-zinc-900/30 p-6 text-center transition hover:border-emerald-400/70"
+                              >
+                                <Upload className="mb-3 h-7 w-7 text-emerald-300" />
+                                <strong className="text-sm text-white">
+                                  {importFile ? importFile.name : `Choose ${importMode.toUpperCase()} file`}
+                                </strong>
+                                <span className="mt-1 text-xs text-zinc-500">
+                                  {importMode === 'pdf' && 'Text extraction uses PDF.js'}
+                                  {importMode === 'docx' && 'Text extraction uses Mammoth.js'}
+                                  {importMode === 'image' && 'OCR uses Tesseract.js · JPG, PNG, or WEBP'}
+                                </span>
+                                {!importFile && (
+                                  <span className="mt-2 text-[11px] text-zinc-400">
+                                    No file selected yet.
+                                  </span>
+                                )}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  <div className="flex items-center justify-between rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wider text-emerald-200">Import confidence</p>
+                      <p className="mt-0.5 text-xs text-zinc-500">
+                        {reviewData.confidence.rejectedFields} unsupported fields excluded
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-emerald-400/15 px-3 py-1 text-sm font-black text-emerald-300">
+                      {reviewData.confidence.overall}%
+                    </span>
+                  </div>
+                  <label className="block">
+                    <span className="mb-1.5 block text-xs font-semibold text-zinc-300">Resume name</span>
+                    <input
+                      type="text"
+                      value={importTitle}
+                      onChange={event => setImportTitle(event.target.value)}
+                      maxLength={100}
+                      placeholder="e.g., Frontend Engineer — Acme"
+                      className="w-full rounded-xl border border-[#2A2E37] bg-[#0F1115] px-4 py-2.5 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10"
+                      autoFocus
+                    />
+                    <span className="mt-1.5 block text-xs text-zinc-500">Use any name that helps identify this version. AI does not choose it for you.</span>
+                  </label>
+                  <div className="space-y-2">
+                    {reviewSections.map(section => {
+                      const confidence = reviewData.confidence.sections[reviewConfidenceKey[section.label]];
+                      return (
                         <div
                           key={section.label}
                           className={`flex items-start gap-3 rounded-xl border p-3.5 ${
@@ -907,9 +950,11 @@ export default function Dashboard({
                               : 'border-zinc-800 bg-zinc-900/30'
                           }`}
                         >
-                          {section.ready
-                            ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-                            : <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-zinc-600" />}
+                          {section.ready ? (
+                            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                          ) : (
+                            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-zinc-600" />
+                          )}
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center justify-between gap-3">
                               <p className="text-xs font-bold uppercase tracking-wider text-zinc-200">{section.label}</p>
@@ -922,11 +967,11 @@ export default function Dashboard({
                             <p className="mt-0.5 truncate text-xs text-zinc-500">{section.detail}</p>
                           </div>
                         </div>
-                      )})}
-                    </div>
+                      );
+                    })}
                   </div>
-                )}
-              </div>
+                </div>
+              )}
 
               <div className="flex flex-col-reverse gap-3 border-t border-[#2A2E37] p-6 sm:flex-row sm:items-center sm:justify-between">
                 <span className="text-xs text-zinc-500">

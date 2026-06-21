@@ -44,18 +44,35 @@ service cloud.firestore {
     }
 
     match /resumes/{resumeId} {
+      function resumeOwnedByCurrentUser(data) {
+        return (data.ownerId == request.auth.uid || data.userId == request.auth.uid)
+          && data.ownerId == data.userId;
+      }
+
       allow create: if isSignedIn()
-        && hasValidResumeIdentity(request.resource.data, resumeId);
+        && request.resource.data.keys().hasAll(['id', 'ownerId', 'userId'])
+        && request.resource.data.id == resumeId
+        && resumeOwnedByCurrentUser(request.resource.data);
 
       allow read, delete: if isSignedIn()
-        && resource.data.keys().hasAll(['ownerId'])
-        && resource.data.ownerId == request.auth.uid;
+        && resource.data.keys().hasAny(['ownerId', 'userId'])
+        && resumeOwnedByCurrentUser(resource.data);
 
       allow update: if isSignedIn()
-        && resource.data.keys().hasAll(['ownerId'])
-        && resource.data.ownerId == request.auth.uid
-        && hasValidResumeIdentity(request.resource.data, resumeId)
-        && request.resource.data.ownerId == resource.data.ownerId;
+        && resource.data.keys().hasAny(['ownerId', 'userId'])
+        && resumeOwnedByCurrentUser(resource.data)
+        && request.resource.data.keys().hasAll(['id', 'ownerId', 'userId'])
+        && request.resource.data.id == resumeId
+        && resumeOwnedByCurrentUser(request.resource.data)
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.userId == resource.data.userId;
+    }
+
+    match /feedback/{feedbackId} {
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasAll(['userId', 'category', 'message', 'route', 'timestamp'])
+        && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if false;
     }
 
     match /atsReports/{reportId} {
@@ -64,6 +81,18 @@ service cloud.firestore {
       allow read, delete: if isSignedIn()
         && resource.data.userId == request.auth.uid;
       allow update: if false;
+    }
+
+    match /aiUsage/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /aiAbuse/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /aiSystem/{document=**} {
+      allow read, write: if false;
     }
 
     match /{document=**} {
