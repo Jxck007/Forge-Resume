@@ -89,3 +89,5 @@ BYOK AI Assist notes (2026-06-20):
 - Gemini QA follow-up uses a minimal REST `contents[].parts[].text` request with `x-goog-api-key`, safe 2.5 Flash defaults, and no key in the URL.
 - Builder Preview exposes Export PDF plus a compact disabled coming-soon menu for DOCX, PNG, and JSON; the visible Print action was removed.
 - At 360px the header preserves the emblem, `Forge`, and the visible Beta badge while hiding only the secondary `Resume` word.
+- Forge Free AI availability now comes only from authenticated `/api/ai/status` and `/api/ai/action`; Admin-only reads cover `aiSystem`, `aiUsage`, and `aiAbuse`, while missing config defaults to enabled when the server env flag and provider keys are present.
+- Import Resume Beta defaults to compact pasted-text input; PDF, DOCX, and image controls are disabled and labeled Coming soon.

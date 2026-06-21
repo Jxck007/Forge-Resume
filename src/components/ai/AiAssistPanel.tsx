@@ -21,6 +21,7 @@ export default function AiAssistPanel({ showToasts }: AiAssistPanelProps) {
     setCustomModelId,
     testConnection,
     forgetKey,
+    refreshFreeStatus,
   } = useAiSession();
 
   const activeProvider = state.provider ? AI_PROVIDER_CHOICES.find(option => option.id === state.provider) : null;
@@ -36,10 +37,19 @@ export default function AiAssistPanel({ showToasts }: AiAssistPanelProps) {
   };
 
   const signedIn = !!getAuthInstance().currentUser;
-  const introTitle = signedIn ? 'AI Assist unlocked' : 'Sign in to unlock limited free AI';
+  const introTitle = signedIn ? 'AI Assist Beta' : 'Sign in to unlock limited free AI';
   const introMessage = signedIn
-    ? 'You get limited free AI actions each day. Review suggestions before applying. Do not include sensitive secrets.'
+    ? 'Use Forge Free AI when available or connect BYOK for this session. Review every suggestion before applying.'
     : 'Sign in to unlock limited free AI or use BYOK if enabled later.';
+  const freeUnavailableMessage = state.freeStatusReason === 'env_disabled'
+    ? 'Forge Free AI is temporarily disabled. Use BYOK or continue manually.'
+    : state.freeStatusReason === 'firestore_disabled'
+      ? 'Forge Free AI is temporarily paused. Use BYOK or continue manually.'
+      : state.freeStatusReason === 'missing_provider_keys'
+        ? 'Forge Free AI provider setup is incomplete. Use BYOK or continue manually.'
+        : state.freeStatusReason === 'guest'
+          ? 'Sign in to use Forge Free AI.'
+          : 'Server AI is not configured correctly.';
 
   return (
     <div className="space-y-4">
@@ -74,12 +84,23 @@ export default function AiAssistPanel({ showToasts }: AiAssistPanelProps) {
           </label>
 
           {state.mode === 'free' && (
-            <div className="md:col-span-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-sm text-zinc-300">
+            <div className={`md:col-span-2 rounded-xl border p-4 text-sm ${state.freeBetaAvailable ? 'border-emerald-500/20 bg-emerald-500/5 text-zinc-300' : 'border-amber-500/20 bg-amber-500/5 text-zinc-300'}`}>
               <strong className="text-white">Forge Free Beta AI</strong>
               <p className="mt-1 text-zinc-400">Up to 25 writing actions per day and 3 pasted-text imports. Availability is shared and may pause during high demand.</p>
-              <p className="mt-2 text-xs font-semibold text-emerald-300">
-                {state.freeActionsRemaining === null ? 'Remaining actions appear after your first request.' : `${state.freeActionsRemaining} free actions remaining today.`}
-              </p>
+              {state.freeStatusLoading ? (
+                <p className="mt-2 text-xs font-semibold text-zinc-300">Checking Free AI availability…</p>
+              ) : state.freeBetaAvailable ? (
+                <p className="mt-2 text-xs font-semibold text-emerald-300">
+                  AI Assist unlocked · {state.freeActionsRemaining ?? 25} free actions remaining.
+                </p>
+              ) : (
+                <div className="mt-2 flex flex-wrap items-center gap-3">
+                  <p className="text-xs font-semibold text-amber-300">{freeUnavailableMessage}</p>
+                  <button type="button" onClick={() => void refreshFreeStatus()} className="forge-secondary-button min-h-8 px-3 py-1 text-xs">
+                    Retry
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -161,8 +182,8 @@ export default function AiAssistPanel({ showToasts }: AiAssistPanelProps) {
           {state.mode === 'byok' && state.isConnected && (
             <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300">Connected for this session</span>
           )}
-          {state.mode === 'free' && (
-            <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300">Free Beta selected</span>
+          {state.mode === 'free' && state.freeBetaAvailable && !state.freeStatusLoading && (
+            <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300">AI Assist unlocked</span>
           )}
           {isGenerating && (
             <span className="rounded-full border border-[#2A2E37] bg-[#0F1115] px-3 py-1 text-xs font-semibold text-zinc-300">AI request running</span>
@@ -170,11 +191,7 @@ export default function AiAssistPanel({ showToasts }: AiAssistPanelProps) {
         </div>
 
         <div className="mt-4 space-y-2 text-sm text-zinc-400">
-          {state.mode === 'free' ? (
-            <p className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-emerald-200">
-              Free AI is ready for signed-in use. Daily and global limits are enforced by the server.
-            </p>
-          ) : state.mode === 'byok' && state.isConnected ? (
+          {state.mode === 'byok' && state.isConnected ? (
             <p className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-emerald-200">
               Connected for this session. Forge will forget this key when you refresh, close the tab, or log out.
             </p>
@@ -182,12 +199,12 @@ export default function AiAssistPanel({ showToasts }: AiAssistPanelProps) {
             <p className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-3 text-zinc-300">
               Connect a BYOK provider to enable summary improvement, bullet rewrites, grammar fixes, and paste-text import beta.
             </p>
-          ) : (
+          ) : state.mode === 'local' ? (
             <p className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-3 text-zinc-300">
               Select Forge Free Beta AI, connect BYOK, or continue without AI.
             </p>
-          )}
-          {state.lastError && (
+          ) : null}
+          {state.mode !== 'free' && state.lastError && (
             <p className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-rose-200">{state.lastError}</p>
           )}
         </div>

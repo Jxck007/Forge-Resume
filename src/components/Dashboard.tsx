@@ -69,7 +69,7 @@ export default function Dashboard({
   const [newTitle, setNewTitle] = useState('');
   const [newTemplate, setNewTemplate] = useState<TemplateId>(() => isTemplateId(settings?.defaultTemplate) ? settings.defaultTemplate : 'modern');
   const [createSource, setCreateSource] = useState<'profile' | 'blank' | 'import'>('profile');
-  const [importMode, setImportMode] = useState<ResumeImportMode>('pdf');
+  const [importMode, setImportMode] = useState<ResumeImportMode>('text');
   const [pastedText, setPastedText] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
   const [reviewData, setReviewData] = useState<ReviewedImport<ResumeData> | null>(null);
@@ -178,12 +178,13 @@ export default function Dashboard({
   };
 
   const assistedImportAvailable = !isGuestMode && (
-    aiState.mode === 'free' || (aiState.mode === 'byok' && aiState.isConnected)
+    (aiState.mode === 'free' && aiState.freeBetaAvailable === true) ||
+    (aiState.mode === 'byok' && aiState.isConnected)
   );
 
   const resetImport = () => {
     setImportOpen(false);
-    setImportMode('pdf');
+    setImportMode('text');
     setPastedText('');
     setImportFile(null);
     setReviewData(null);
@@ -642,7 +643,7 @@ export default function Dashboard({
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2 text-sm font-semibold"><span>Import resume beta</span>{isGuestMode && <small className="text-amber-300">Sign in</small>}</div>
-                      <div className="mt-1 text-xs text-zinc-400">Use PDF, DOCX, image, or pasted text and review it before saving.</div>
+                      <div className="mt-1 text-xs text-zinc-400">Paste resume text and review the structured result before saving.</div>
                     </button>
                     <button
                       type="button"
@@ -831,26 +832,32 @@ export default function Dashboard({
                     </div>
                   ) : (
                     <div className="space-y-5">
+                      <p className="text-sm text-zinc-400">
+                        Paste text import is available now. PDF and DOCX import are being upgraded and will return soon.
+                      </p>
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                         {[
-                          { id: 'pdf' as const, label: 'Upload PDF', icon: FileText },
-                          { id: 'docx' as const, label: 'Upload DOCX', icon: FileDown },
-                          { id: 'image' as const, label: 'Upload Image', icon: ImageIcon },
-                          { id: 'text' as const, label: 'Paste Text', icon: ClipboardList },
+                          { id: 'pdf' as const, label: 'PDF', icon: FileText, comingSoon: true },
+                          { id: 'docx' as const, label: 'DOCX', icon: FileDown, comingSoon: true },
+                          { id: 'image' as const, label: 'Image', icon: ImageIcon, comingSoon: true },
+                          { id: 'text' as const, label: 'Paste Text', icon: ClipboardList, comingSoon: false },
                         ].map(option => (
                           <button
                             key={option.id}
                             type="button"
                             onClick={() => selectImportMode(option.id)}
-                            disabled={loadingAction}
+                            disabled={loadingAction || option.comingSoon}
                             className={`flex min-h-24 flex-col items-center justify-center gap-2 rounded-xl border p-3 text-xs font-bold transition ${
                               importMode === option.id
                                 ? 'border-emerald-400 bg-emerald-400/10 text-emerald-200'
-                                : 'border-zinc-700 bg-zinc-900/40 text-zinc-400 hover:border-zinc-600 hover:text-white'
+                                : option.comingSoon
+                                  ? 'cursor-not-allowed border-zinc-800 bg-zinc-950/30 text-zinc-600'
+                                  : 'border-zinc-700 bg-zinc-900/40 text-zinc-400 hover:border-zinc-600 hover:text-white'
                             }`}
                           >
                             <option.icon className="h-5 w-5" />
                             {option.label}
+                            {option.comingSoon && <span className="text-[10px] font-medium uppercase tracking-wide">Coming soon</span>}
                           </button>
                         ))}
                       </div>
@@ -863,10 +870,10 @@ export default function Dashboard({
                           <textarea
                             value={pastedText}
                             onChange={event => setPastedText(event.target.value)}
-                            rows={10}
+                            rows={5}
                             maxLength={12000}
-                            placeholder="Paste resume content here..."
-                            className="w-full resize-none rounded-xl border border-[#2A2E37] bg-[#0F1115] p-4 font-mono text-sm text-zinc-300 outline-none transition placeholder:text-zinc-600 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10"
+                            placeholder="Paste your resume text here…"
+                            className="min-h-[160px] max-h-[260px] w-full resize-y rounded-xl border border-[#2A2E37] bg-[#0F1115] p-4 font-mono text-sm text-zinc-300 outline-none transition placeholder:text-zinc-600 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10"
                           />
                           <p className="mt-1 text-right text-[10px] text-zinc-500">{pastedText.length}/12,000</p>
                         </div>
@@ -874,7 +881,7 @@ export default function Dashboard({
                         <div>
                           {assistedImportAvailable ? (
                             <div className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-5 text-sm text-zinc-300">
-                              This beta currently supports pasted text only. PDF, DOCX, and image import will return after the import boundary is hardened.
+                              Paste text import is available now. PDF and DOCX import are being upgraded and will return soon.
                             </div>
                           ) : (
                             <>

@@ -1,6 +1,7 @@
 export type AiMode = 'local' | 'free' | 'byok';
 
 export type AiProviderId = 'gemini' | 'groq' | 'cerebras' | 'openrouter';
+export type FreeAiStatusReason = 'guest' | 'env_disabled' | 'firestore_disabled' | 'missing_provider_keys' | 'server_error';
 
 export type AiRewriteStyle =
   | 'professional'
@@ -31,6 +32,10 @@ export interface AiSessionState {
   lastError: string | null;
   freeActionsRemaining: number | null;
   freeProvider: 'groq' | 'cerebras' | 'gemini' | null;
+  freeBetaAvailable: boolean | null;
+  freeStatusReason: FreeAiStatusReason | null;
+  freeStatusLoading: boolean;
+  freeResetAt: string | null;
 }
 
 export interface AiGenerateInput {

@@ -109,9 +109,6 @@ const sanitizeText = (text: string) => text
 
 const hashValue = (value: string) => {
   const salt = process.env.AI_ABUSE_HASH_SALT?.trim() || '';
-  if (!salt) {
-    console.warn('AI abuse hashing is running without AI_ABUSE_HASH_SALT. Configure a server-side salt for stronger limits.');
-  }
   return createHash('sha256').update(`${salt}|${value}`).digest('hex');
 };
 
@@ -204,6 +201,7 @@ const callProvider = async (provider: ServerProvider, request: ActionRequest) =>
 };
 
 export default async function handler(request: ApiRequest, response: ApiResponse) {
+  response.setHeader('Cache-Control', 'private, no-store');
   if (request.method !== 'POST') {
     response.setHeader('Allow', 'POST');
     return sendError(response, 405, 'METHOD_NOT_ALLOWED', 'Use POST for this AI action.');
@@ -218,22 +216,30 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     const token = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
     if (!token) throw new SafeApiError(401, 'AUTH_REQUIRED', 'Sign in to use Forge Free Beta AI.');
 
+    let auth: ReturnType<typeof getAdminAuth>;
+    let db: ReturnType<typeof getAdminDb>;
+    try {
+      auth = getAdminAuth();
+      db = getAdminDb();
+    } catch {
+      throw new SafeApiError(503, 'SERVER_ERROR', 'Server AI is not configured correctly.');
+    }
+
     let uid = '';
     try {
-      uid = (await getAdminAuth().verifyIdToken(token)).uid;
+      uid = (await auth.verifyIdToken(token)).uid;
     } catch {
       throw new SafeApiError(401, 'AUTH_REQUIRED', 'Sign in to use Forge Free Beta AI.');
     }
 
     const action = validateRequest(parseBody(request.body));
-    const db = getAdminDb();
     const configSnapshot = await db.doc('aiSystem/config').get();
     const config = configSnapshot.exists ? configSnapshot.data() : undefined;
     if (config?.freeBetaEnabled === false) {
-      const message = typeof config.message === 'string' && config.message.trim()
-        ? config.message.trim().slice(0, 200)
-        : 'Forge Free AI is unavailable. Use BYOK or continue manually.';
-      throw new SafeApiError(503, 'FREE_BETA_DISABLED', message);
+      throw new SafeApiError(503, 'FREE_BETA_DISABLED', 'Forge Free AI is unavailable. Use BYOK or continue manually.');
+    }
+    if (!SERVER_AI_ROUTES[action.task].some(provider => Boolean(getProviderKey(provider)))) {
+      throw new SafeApiError(503, 'MISSING_PROVIDER_KEYS', 'Forge Free AI provider setup is incomplete. Use BYOK or continue manually.');
     }
 
     const day = new Date().toISOString().slice(0, 10);
@@ -405,6 +411,6 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     if (error instanceof SafeApiError) {
       return sendError(response, error.statusCode, error.code, error.message);
     }
-    return sendError(response, 503, 'FREE_AI_UNAVAILABLE', 'Forge Free AI is unavailable. Use BYOK or continue manually.');
+    return sendError(response, 503, 'SERVER_ERROR', 'Server AI is not configured correctly.');
   }
 }

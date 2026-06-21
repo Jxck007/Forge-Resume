@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { onAuthStateChanged } from 'firebase/auth';
 import { buildAiPrompt } from '../ai/promptBuilder';
 import { AI_PROVIDER_ADAPTERS, AI_PROVIDER_OPTIONS, AI_SAFE_ERROR_MESSAGE } from '../ai/providers';
-import { AiGenerateInput, AiGenerateResult, AiMode, AiProviderId, AiSessionState } from '../ai/types';
+import { AiGenerateInput, AiGenerateResult, AiMode, AiProviderId, AiSessionState, FreeAiStatusReason } from '../ai/types';
 import { getAuthInstance } from '../config/firebase';
 import { getOrCreateForgeDeviceId } from '../utils/storageKeys';
 
@@ -17,6 +17,7 @@ interface AiSessionContextValue {
   setSelectedModel: (model: string | null) => void;
   setCustomModelId: (model: string) => void;
   testConnection: () => Promise<void>;
+  refreshFreeStatus: () => Promise<void>;
   forgetKey: () => void;
   generate: (input: Omit<AiGenerateInput, 'apiKey' | 'provider' | 'model'>) => Promise<AiGenerateResult>;
   clearSession: () => void;
@@ -32,6 +33,10 @@ const initialState: AiSessionState = {
   lastError: null,
   freeActionsRemaining: null,
   freeProvider: null,
+  freeBetaAvailable: null,
+  freeStatusReason: null,
+  freeStatusLoading: false,
+  freeResetAt: null,
 };
 
 const FREE_AI_ERRORS: Record<string, string> = {
@@ -44,6 +49,8 @@ const FREE_AI_ERRORS: Record<string, string> = {
   IMPORT_LIMIT: 'Daily free import limit reached. Use BYOK or continue manually.',
   GLOBAL_LIMIT: 'Forge Free AI is busy right now. Try BYOK or continue manually.',
   PROVIDERS_BUSY: 'Forge Free AI is busy right now. Try BYOK or continue manually.',
+  MISSING_PROVIDER_KEYS: 'Forge Free AI provider setup is incomplete. Use BYOK or continue manually.',
+  SERVER_ERROR: 'Server AI is not configured correctly.',
   REPEATED_SPAM: 'Please wait before trying again.',
   IP_DAILY_LIMIT: 'Daily free AI limit reached. Use BYOK or continue manually.',
   DEVICE_DAILY_LIMIT: 'Daily free AI limit reached. Use BYOK or continue manually.',
@@ -60,7 +67,7 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AiSessionState>(() => ({
     ...initialState,
     mode: getAuthInstance().currentUser ? 'free' : 'local',
-    isConnected: !!getAuthInstance().currentUser,
+    isConnected: false,
   }));
   const [apiKey, setApiKeyState] = useState('');
   const [modelOptions, setModelOptions] = useState<string[]>([]);
@@ -79,7 +86,7 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
     setState({
       ...initialState,
       mode: defaultMode,
-      isConnected: defaultMode === 'free' && isUserSignedIn,
+      isConnected: false,
     });
     setApiKeyState('');
     setModelOptions([]);
@@ -103,15 +110,75 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
     setState(current => ({
       ...current,
       mode,
-      isConnected: mode === 'free' ? isUserSignedIn : false,
+      isConnected: false,
       isTesting: false,
       lastError: null,
+      freeBetaAvailable: mode === 'free' ? null : current.freeBetaAvailable,
+      freeStatusReason: mode === 'free' && !isUserSignedIn ? 'guest' : null,
+      freeStatusLoading: mode === 'free' && isUserSignedIn,
     }));
     if (mode !== 'byok') {
       setApiKeyState('');
       setModelOptions([]);
     }
   }, []);
+
+  const refreshFreeStatus = useCallback(async () => {
+    const currentUser = getAuthInstance().currentUser;
+    if (!currentUser) {
+      setState(current => ({
+        ...current,
+        isConnected: false,
+        freeBetaAvailable: false,
+        freeStatusReason: 'guest',
+        freeStatusLoading: false,
+        freeActionsRemaining: 0,
+        freeResetAt: null,
+      }));
+      return;
+    }
+
+    const uid = currentUser.uid;
+    setState(current => ({ ...current, isConnected: false, freeStatusLoading: true, lastError: null }));
+    try {
+      const idToken = await currentUser.getIdToken();
+      const response = await fetch('/api/ai/status', {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      const payload = await response.json().catch(() => null) as null | {
+        ok?: boolean;
+        freeBetaAvailable?: boolean;
+        reason?: FreeAiStatusReason;
+        actionsRemaining?: number;
+        resetAt?: string;
+      };
+      if (getAuthInstance().currentUser?.uid !== uid) return;
+      const available = response.ok && payload?.ok === true && payload.freeBetaAvailable === true;
+      setState(current => ({
+        ...current,
+        isConnected: current.mode === 'free' && available,
+        freeBetaAvailable: available,
+        freeStatusReason: available ? null : payload?.reason || 'server_error',
+        freeStatusLoading: false,
+        freeActionsRemaining: typeof payload?.actionsRemaining === 'number' ? payload.actionsRemaining : null,
+        freeResetAt: typeof payload?.resetAt === 'string' ? payload.resetAt : null,
+      }));
+    } catch {
+      if (getAuthInstance().currentUser?.uid !== uid) return;
+      setState(current => ({
+        ...current,
+        isConnected: false,
+        freeBetaAvailable: false,
+        freeStatusReason: 'server_error',
+        freeStatusLoading: false,
+      }));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (state.mode === 'free') void refreshFreeStatus();
+  }, [refreshFreeStatus, state.mode]);
 
   useEffect(() => {
     const auth = getAuthInstance();
@@ -228,6 +295,9 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
     }
     const usingFreeAi = state.mode === 'free';
     const usingByok = state.mode === 'byok';
+    if (usingFreeAi && state.freeBetaAvailable !== true) {
+      throw new Error('Forge Free AI is unavailable. Use BYOK or continue manually.');
+    }
     if (!usingFreeAi && (!usingByok || !state.provider || !state.isConnected || !apiKey.trim())) {
       throw new Error('AI is disconnected. Reconnect your key to continue.');
     }
@@ -289,6 +359,24 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
           throw new Error('AI session changed. Run the action again if needed.');
         }
         if (!response.ok || !payload?.ok || typeof payload.text !== 'string') {
+          const unavailableReason: FreeAiStatusReason | null = payload?.code === 'MISSING_PROVIDER_KEYS'
+            ? 'missing_provider_keys'
+            : payload?.code === 'FREE_BETA_DISABLED'
+              ? 'firestore_disabled'
+              : payload?.code === 'SERVER_ERROR'
+                ? 'server_error'
+                : payload?.code === 'AUTH_REQUIRED'
+                  ? 'guest'
+                  : null;
+          if (unavailableReason) {
+            setState(current => ({
+              ...current,
+              isConnected: false,
+              freeBetaAvailable: false,
+              freeStatusReason: unavailableReason,
+              freeStatusLoading: false,
+            }));
+          }
           throw new Error(FREE_AI_ERRORS[payload?.code || ''] || 'Forge Free AI is unavailable. Use BYOK or continue manually.');
         }
         const text = payload.text
@@ -300,6 +388,9 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
           ...current,
           freeActionsRemaining: typeof payload.actionsRemaining === 'number' ? payload.actionsRemaining : current.freeActionsRemaining,
           freeProvider: payload.provider || null,
+          freeBetaAvailable: true,
+          freeStatusReason: null,
+          isConnected: true,
           lastError: null,
         }));
         return { text, actionsRemaining: payload.actionsRemaining, provider: payload.provider };
@@ -335,7 +426,7 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
         setIsGenerating(false);
       }
     }
-  }, [apiKey, lastRequestAt, resolveModel, state.isConnected, state.mode, state.provider]);
+  }, [apiKey, lastRequestAt, resolveModel, state.freeBetaAvailable, state.isConnected, state.mode, state.provider]);
 
   const value = useMemo<AiSessionContextValue>(() => ({
     state,
@@ -348,10 +439,11 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
     setSelectedModel,
     setCustomModelId,
     testConnection,
+    refreshFreeStatus,
     forgetKey,
     generate,
     clearSession,
-  }), [apiKey, clearSession, forgetKey, generate, isGenerating, modelOptions, setApiKey, setCustomModelId, setMode, setProvider, setSelectedModel, state, testConnection]);
+  }), [apiKey, clearSession, forgetKey, generate, isGenerating, modelOptions, refreshFreeStatus, setApiKey, setCustomModelId, setMode, setProvider, setSelectedModel, state, testConnection]);
 
   return <AiSessionContext.Provider value={value}>{children}</AiSessionContext.Provider>;
 }

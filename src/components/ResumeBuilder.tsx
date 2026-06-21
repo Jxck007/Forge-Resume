@@ -103,7 +103,8 @@ function ResumeBuilder({
   const mountedRef = useRef(true);
   const { state: aiState, generate, isGenerating } = useAiSession();
   const isAiConfigured = aiEnabled && (
-    aiState.mode === 'free' || (aiState.mode === 'byok' && aiState.isConnected)
+    (aiState.mode === 'free' && aiState.freeBetaAvailable === true) ||
+    (aiState.mode === 'byok' && aiState.isConnected)
   );
   const isAiBusy = isGenerating || Object.values(aiLoading).some(Boolean);
   const connectedProviderLabel = aiState.mode === 'free'
