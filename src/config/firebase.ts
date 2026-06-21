@@ -58,14 +58,17 @@ export function getAuthInstance() {
 }
 
 export async function testFirebaseConnection(): Promise<boolean> {
-  if (!db) throw new Error("Database not initialized");
+  if (!db || !auth) throw new Error("Firebase not initialized");
   try {
-    await getDocFromServer(doc(db, 'system', 'healthcheck'));
+    // Only probe a path the signed-in user is allowed to read. Anonymous startup
+    // must not intentionally trigger a Firestore permission-denied response.
+    if (auth.currentUser) {
+      await getDocFromServer(doc(db, 'users', auth.currentUser.uid));
+    }
     return true;
-  } catch (err: any) {
-    if (err.code === 'permission-denied') return true;
-    console.error("Firebase Configuration Error: ", err.message || err);
-    if (err.message && err.message.includes('API key not valid')) {
+  } catch (err: unknown) {
+    const error = err as { message?: string };
+    if (error.message?.includes('API key not valid')) {
        resetFirebaseConfiguration();
     }
     throw err;
@@ -80,4 +83,3 @@ export function resetFirebaseConfiguration() {
 if (hasFirebaseEnvironment) {
   initializeFirebase(firebaseConfig);
 }
-

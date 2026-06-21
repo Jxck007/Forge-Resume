@@ -1,5 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { getAdminAuth, getAdminDb, isFirebaseAdminConfigurationError } from '../firebaseAdmin';
+import {
+  getAdminAuth,
+  getAdminDb,
+  isFirebaseAdminConfigured,
+  isFirebaseAdminConfigurationError,
+} from '../firebaseAdmin.js';
 
 type ApiRequest = IncomingMessage;
 type ApiResponse = ServerResponse & {
@@ -46,6 +51,11 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     return response.status(405).json({ ok: false, code: 'METHOD_NOT_ALLOWED', message: 'Use GET for AI status.' });
   }
 
+  if (!isFirebaseAdminConfigured()) {
+    response.setHeader('Cache-Control', 'private, no-store');
+    return response.status(503).json({ ok: false, reason: 'admin_not_configured' });
+  }
+
   const authorization = request.headers.authorization || '';
   const token = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
   if (!token) return sendStatus(response, { signedIn: false, freeBetaAvailable: false, reason: 'guest' });
@@ -85,7 +95,8 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     return sendStatus(response, { signedIn: true, freeBetaAvailable: true, used });
   } catch (error) {
     if (isFirebaseAdminConfigurationError(error)) {
-      return sendStatus(response, { signedIn: true, freeBetaAvailable: false, reason: 'admin_not_configured' });
+      response.setHeader('Cache-Control', 'private, no-store');
+      return response.status(503).json({ ok: false, reason: 'admin_not_configured' });
     }
     return sendStatus(response, { signedIn: true, freeBetaAvailable: false, reason: 'server_error' });
   }

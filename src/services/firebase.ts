@@ -774,8 +774,8 @@ export function subscribeToUserResumes(userId: string, callback: (resumes: Resum
         });
         callback([...cachedById.values()]);
       },
-      error => {
-        console.warn('onSnapshot error (likely offline). Falling back to local index:', error);
+      () => {
+        console.warn('Resume sync unavailable. Falling back to the account-scoped local cache.');
         try {
           callback(readCachedUserResumes(userId));
         } catch {

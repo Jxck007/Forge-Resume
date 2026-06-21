@@ -91,4 +91,6 @@ BYOK AI Assist notes (2026-06-20):
 - At 360px the header preserves the emblem, `Forge`, and the visible Beta badge while hiding only the secondary `Resume` word.
 - Forge Free AI availability now comes only from authenticated `/api/ai/status` and `/api/ai/action`; Admin-only reads cover `aiSystem`, `aiUsage`, and `aiAbuse`, while missing config defaults to enabled when the server env flag and provider keys are present.
 - Firebase Admin server routes use `FIREBASE_ADMIN_PROJECT_ID`, `FIREBASE_ADMIN_CLIENT_EMAIL`, and newline-normalized `FIREBASE_ADMIN_PRIVATE_KEY`; missing/invalid initialization reports `admin_not_configured` without exposing values.
+- Vercel AI functions use ESM-safe `.js` relative specifiers for TypeScript server helpers, preventing extensionless `/var/task/api/firebaseAdmin` runtime import failures.
+- Client Firestore uses owner-scoped top-level `profiles`, `resumes`, and paused `atsReports`, plus private `users/{uid}` and create-only `feedback`; the only realtime listener filters resumes by owner, and all `aiUsage`, `aiAbuse`, `aiSystem`, and `system` client access remains denied.
 - Import Resume Beta defaults to compact pasted-text input; PDF, DOCX, and image controls are disabled and labeled Coming soon.

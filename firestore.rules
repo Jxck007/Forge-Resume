@@ -35,6 +35,10 @@ service cloud.firestore {
       allow read, write: if isCurrentUser(userId);
     }
 
+    match /users/{userId}/{document=**} {
+      allow read, write: if isCurrentUser(userId);
+    }
+
     match /profiles/{userId} {
       allow read: if isCurrentUser(userId);
       allow create, update: if isCurrentUser(userId)
@@ -92,6 +96,10 @@ service cloud.firestore {
     }
 
     match /aiSystem/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /system/{document=**} {
       allow read, write: if false;
     }
 

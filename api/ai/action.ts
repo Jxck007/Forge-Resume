@@ -1,9 +1,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash } from 'crypto';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import { buildAiPrompt } from './promptBuilder';
-import type { AiRewriteStyle, AiTask } from './types';
-import { getAdminAuth, getAdminDb, isFirebaseAdminConfigurationError } from '../firebaseAdmin';
+import { buildAiPrompt } from './promptBuilder.js';
+import type { AiRewriteStyle, AiTask } from './types.js';
+import {
+  getAdminAuth,
+  getAdminDb,
+  isFirebaseAdminConfigured,
+  isFirebaseAdminConfigurationError,
+} from '../firebaseAdmin.js';
 
 type ApiRequest = IncomingMessage & { body?: unknown };
 type ApiResponse = ServerResponse & {
@@ -205,6 +210,10 @@ export default async function handler(request: ApiRequest, response: ApiResponse
   if (request.method !== 'POST') {
     response.setHeader('Allow', 'POST');
     return sendError(response, 405, 'METHOD_NOT_ALLOWED', 'Use POST for this AI action.');
+  }
+
+  if (!isFirebaseAdminConfigured()) {
+    return response.status(503).json({ ok: false, reason: 'admin_not_configured' });
   }
 
   try {
