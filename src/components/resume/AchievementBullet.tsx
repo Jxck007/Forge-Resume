@@ -11,7 +11,7 @@ interface AchievementBulletProps extends React.Attributes {
 
 export function AchievementBullet({ achievement, styles }: AchievementBulletProps) {
   return (
-    <View style={styles.listItem} wrap={false}>
+    <View style={styles.listItem} wrap>
       <Text style={styles.bullet}>{'\u2022'}</Text>
       <Text style={styles.description}>
         {achievement.title ? `${achievement.title}: ` : ''}

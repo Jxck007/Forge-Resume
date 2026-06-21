@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { ResumeData, AtsReport, ProfileData, UserSettings } from '../types';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { AtsResult, AtsSuggestion, ResumeData, AtsReport, ProfileData, UserSettings } from '../types';
 import { saveAtsReport, fetchUserAtsReports } from '../services/firebase';
 import {
   validateResumeText,
@@ -9,9 +9,13 @@ import {
   LocalAtsResult,
   AtsSourceKind,
 } from '../utils/advancedAtsEngine';
+import { AtsStructuralScanInput, runAtsAnalysisV2, runAtsAnalysisV2WithAI } from '../utils/atsV2';
 import { serializeResumeBySectionOrder } from '../utils/sectionOrder';
 import { extractResumeText } from '../utils/resumeImport';
+import { readStorageJson, removeStorageValue, storageKeys, writeStorageJson } from '../utils/storageKeys';
+import { normalizeResumeModel } from '../schema/resumeSchema';
 import { motion, AnimatePresence } from 'motion/react';
+import AtsDiagnosticsConsole from './AtsDiagnosticsConsole';
 
 import {
   FileText,
@@ -50,6 +54,7 @@ interface ATSAnalyzerProps {
   settings: UserSettings;
   showToasts: (msg: string, type: 'success' | 'error' | 'info') => void;
   activeResumeId?: string | null;
+  onApplySuggestion: (resumeId: string, suggestion: AtsSuggestion, editedValue?: string) => void;
 }
 
 type Mode = 'upload' | 'preset';
@@ -66,6 +71,33 @@ type ProgressStep =
   | 'pageFit'
   | 'synthesis'
   | 'completed';
+
+const buildDiagnosticsInput = (
+  resumeSource: unknown,
+  source: 'migration' | 'parser',
+  templateId: string | undefined,
+  settings: UserSettings,
+  jobDescription: string,
+  metrics: LocalAtsResult
+): AtsStructuralScanInput => ({
+  resume: normalizeResumeModel(resumeSource, { source }),
+  templateId,
+  settings,
+  jobDescription,
+  renderMetrics: {
+    estimatedPages: metrics.pageFitDetails.estimatedPages,
+    mobileRisk: metrics.responsivenessAnalysis.mobileScore < 70
+      ? 'high'
+      : metrics.responsivenessAnalysis.mobileScore < 85 ? 'medium' : 'low',
+    tabletRisk: metrics.responsivenessAnalysis.tabletScore < 70
+      ? 'high'
+      : metrics.responsivenessAnalysis.tabletScore < 85 ? 'medium' : 'low',
+    textOverflowRisk: metrics.responsivenessAnalysis.textOverflowRisk,
+    skillsSideBySide:
+      metrics.skillAnalysis.placement === 'sidebar' && metrics.layoutAnalysis.detectedColumns === 'multi',
+    experienceSideBySide: metrics.layoutAnalysis.detectedColumns === 'multi',
+  },
+});
 
 const hydrateHistoricMetrics = (report: AtsReport): LocalAtsResult => ({
   atsScore: report.atsScore,
@@ -423,10 +455,15 @@ const JD_LIBRARY: Record<string, { title: string; description: string }> = {
 export default function ATSAnalyzer({
   resumes,
   userUid,
+  settings,
   showToasts,
   activeResumeId,
+  onApplySuggestion,
 }: ATSAnalyzerProps) {
   // Input states
+  const isGuestUser = userUid === 'guest';
+  const atsCacheKey = isGuestUser ? storageKeys.guest.atsCache : storageKeys.user.atsCache(userUid);
+
   const [activeMode, setActiveMode] = useState<Mode>('upload');
   const [scanType, setScanType] = useState<ScanType>('general');
   const [jdCategory, setJdCategory] = useState<string>('softwareEngineer');
@@ -452,6 +489,7 @@ export default function ATSAnalyzer({
   const [issueFilter, setIssueFilter] = useState<'all' | 'critical'>('all');
   const [sectionIssueFilter, setSectionIssueFilter] = useState<'all' | string>('all');
   const [expandedIssueIds, setExpandedIssueIds] = useState<string[]>([]);
+  const [atsDiagnosticsResult, setAtsDiagnosticsResult] = useState<AtsResult | null>(null);
   const presentationReport = localMetrics ? {
     strengths: localMetrics.strengths,
     weaknesses: localMetrics.warnings,
@@ -471,6 +509,11 @@ export default function ATSAnalyzer({
     groups[key].push(issue);
     return groups;
   }, {});
+  const structuralResumeSource = useMemo(() => {
+    if (activeMode === 'preset' && selectedPresetResume) return selectedPresetResume;
+    if (parsedCandidateJson) return parsedCandidateJson;
+    return null;
+  }, [activeMode, parsedCandidateJson, selectedPresetResume]);
 
   // Cancellation tokens
   const isCancelledRef = useRef<boolean>(false);
@@ -490,6 +533,35 @@ export default function ATSAnalyzer({
         ? current.filter(id => id !== issueId)
         : [...current, issueId]
     ));
+  };
+
+  const handleSuggestionAction = (
+    suggestion: AtsSuggestion,
+    action: 'apply' | 'learning' | 'ignore' | 'not_true',
+    editedValue?: string
+  ) => {
+    if (action === 'ignore' || action === 'not_true') {
+      setAtsDiagnosticsResult(current => current ? {
+        ...current,
+        suggestions: current.suggestions.map(item => item.id === suggestion.id
+          ? { ...item, status: action === 'not_true' ? 'not_true' : 'ignored' }
+          : item),
+      } : current);
+      return;
+    }
+    if (activeMode !== 'preset' || !selectedResumeId) {
+      showToasts('Import or select a saved resume before applying suggestions to Builder.', 'info');
+      return;
+    }
+    const actionable = action === 'learning'
+      ? { ...suggestion, type: 'add_learning_target' as const, target: { ...suggestion.target, sectionId: 'learningTargets', fieldPath: 'learningTargets' } }
+      : suggestion;
+    onApplySuggestion(selectedResumeId, actionable, action === 'learning' ? undefined : editedValue);
+    setAtsDiagnosticsResult(current => current ? {
+      ...current,
+      suggestions: current.suggestions.map(item => item.id === suggestion.id ? { ...item, status: 'applied' } : item),
+    } : current);
+    showToasts(action === 'learning' ? 'Added to learning targets.' : 'Suggestion applied to Builder.', 'success');
   };
 
   // Load parent resume options
@@ -517,35 +589,58 @@ export default function ATSAnalyzer({
   };
 
   useEffect(() => {
+    if (isGuestUser) return;
     loadHistoryLogs();
-  }, [userUid]);
+  }, [isGuestUser, userUid]);
+
+  useEffect(() => {
+    if (!localMetrics || !structuralResumeSource) {
+      setAtsDiagnosticsResult(null);
+      return;
+    }
+
+    const normalized = normalizeResumeModel(structuralResumeSource, {
+      source: activeMode === 'preset' ? 'migration' : 'parser',
+    });
+    const baseInput = buildDiagnosticsInput(
+      normalized,
+      activeMode === 'preset' ? 'migration' : 'parser',
+      activeMode === 'preset' ? selectedPresetResume?.templateId : normalized.templateId,
+      settings,
+      scanType === 'targeted' ? jobDescription : '',
+      localMetrics
+    );
+
+    setAtsDiagnosticsResult(runAtsAnalysisV2(baseInput));
+  }, [activeMode, jobDescription, localMetrics, scanType, selectedPresetResume, settings, structuralResumeSource]);
 
   // Pre-load from localStorage cached report if exists (for extreme state resilience)
   useEffect(() => {
-    const cached = localStorage.getItem(`ats_cache_${userUid}`);
+    const cached = readStorageJson<{ localMetrics?: unknown; parsedResume?: ProfileData; scanType?: string }>(atsCacheKey);
     if (cached) {
       try {
-        const data = JSON.parse(cached);
+        const data = cached;
+        const metrics = data.localMetrics as Record<string, unknown> | undefined;
         if (
-          Number.isFinite(data.localMetrics?.atsScore) &&
-          data.localMetrics?.breakdown &&
-          data.localMetrics?.pageFitDetails &&
-          data.localMetrics?.keywordGaps &&
+          Number.isFinite(metrics?.atsScore as number | undefined) &&
+          metrics?.breakdown &&
+          metrics?.pageFitDetails &&
+          metrics?.keywordGaps &&
           data.parsedResume
         ) {
-          setLocalMetrics(normalizeLocalMetrics(data.localMetrics));
+          setLocalMetrics(normalizeLocalMetrics(metrics));
           setParsedCandidateJson(data.parsedResume);
           setScanType(data.scanType === 'general' ? 'general' : 'targeted');
           setProgressStep('completed');
         } else {
-          localStorage.removeItem(`ats_cache_${userUid}`);
+          removeStorageValue(atsCacheKey);
         }
       } catch {
         // clear corrupted cache
-        localStorage.removeItem(`ats_cache_${userUid}`);
+        removeStorageValue(atsCacheKey);
       }
     }
-  }, [userUid]);
+  }, [atsCacheKey]);
 
   // Cancel ongoing workflow
   const handleCancelAnalysis = () => {
@@ -772,15 +867,31 @@ export default function ATSAnalyzer({
       // Save references in states
       setParsedCandidateJson(parsedResume);
       setLocalMetrics(localResult);
+      const diagnosticsInput = buildDiagnosticsInput(
+        parsedResume,
+        activeMode === 'preset' ? 'migration' : 'parser',
+        activeMode === 'preset'
+          ? resumes.find(candidate => candidate.id === selectedResumeId)?.templateId
+          : normalizeResumeModel(parsedResume, { source: 'parser' }).templateId,
+        settings,
+        effectiveJobDescription,
+        localResult
+      );
+      setAtsDiagnosticsResult(runAtsAnalysisV2(diagnosticsInput));
+      void runAtsAnalysisV2WithAI(diagnosticsInput).then(result => {
+        if (!isCancelledRef.current) setAtsDiagnosticsResult(result);
+      }).catch(() => {
+        if (!isCancelledRef.current) setAtsDiagnosticsResult(runAtsAnalysisV2(diagnosticsInput));
+      });
       setProgressStep('completed');
-      showToasts(scanType === 'general' ? 'General ATS scan completed!' : 'ATS match diagnostics completed!', 'success');
+      showToasts(scanType === 'general' ? 'Local readability check completed.' : 'Job-specific analysis completed.', 'success');
 
       // Cache report locally in localStorage to avoid re-calls
-      localStorage.setItem(`ats_cache_${userUid}`, JSON.stringify({
+      writeStorageJson(atsCacheKey, {
         localMetrics: localResult,
         parsedResume,
         scanType,
-      }));
+      });
 
     } catch (err: any) {
       if (err.message === 'Cancelled') return;
@@ -792,6 +903,10 @@ export default function ATSAnalyzer({
 
   // Save parsed diagnostics report to Firebase history (Explicitly on user choice)
   const handleSaveToCloud = async () => {
+    if (isGuestUser) {
+      showToasts('Guest scans stay local only. Sign in to archive ATS history.', 'info');
+      return;
+    }
     if (!localMetrics || !parsedCandidateJson) return;
 
     setSavingReport(true);
@@ -849,7 +964,7 @@ export default function ATSAnalyzer({
 
   // Clear loaded reports to start fresh
   const handleStartFresh = () => {
-    localStorage.removeItem(`ats_cache_${userUid}`);
+    removeStorageValue(atsCacheKey);
     setLocalMetrics(null);
     setParsedCandidateJson(null);
     setProgressStep('idle');
@@ -885,6 +1000,15 @@ export default function ATSAnalyzer({
         </div>
       </div>
 
+      {progressStep === 'idle' && !localMetrics && (
+        <div className="mb-6 rounded-2xl border border-[#2A2E37] bg-[#171A21] p-5">
+          <h3 className="text-sm font-bold text-white">No ATS scan yet.</h3>
+          <p className="mt-1 text-sm text-zinc-400">
+            Choose a resume or upload a file to scan for ATS readiness, keyword coverage, and layout risks.
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         
         {/* LEFT COMPONENT: ANALYZE CONTROLS - Hidden in Print & Completed results view */}
@@ -898,7 +1022,7 @@ export default function ATSAnalyzer({
                 <span>1. Choose scan type</span>
               </h3>
               <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
-                General scans measure ATS readiness. Targeted scans also measure fit against a job description.
+                Local checks review structure and parseability. Job matching requires both AI and a target job description.
               </p>
             </div>
 
@@ -911,8 +1035,8 @@ export default function ATSAnalyzer({
               >
                 <CheckCircle className="h-4 w-4" />
                 <span>
-                  <strong>General ATS scan</strong>
-                  <small>No job description needed</small>
+                  <strong>Local readability</strong>
+                  <small>Structure and parseability only</small>
                 </span>
               </button>
               <button
@@ -923,8 +1047,8 @@ export default function ATSAnalyzer({
               >
                 <Search className="h-4 w-4" />
                 <span>
-                  <strong>Targeted match</strong>
-                  <small>Compare against a role</small>
+                  <strong>AI Job Match</strong>
+                  <small>AI provider and job description required</small>
                 </span>
               </button>
             </div>
@@ -958,7 +1082,7 @@ export default function ATSAnalyzer({
             </h3>
 
             {/* Selector tabs */}
-            <div className="flex rounded-lg bg-zinc-100 dark:bg-zinc-950 p-1 mb-6">
+            <div className="mb-6 grid grid-cols-1 gap-2 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-950 sm:grid-cols-2">
               <button
                 onClick={() => { setActiveMode('upload'); }}
                 className={`flex-1 flex items-center justify-center gap-2 py-1.5 text-[11px] font-bold rounded transition ${
@@ -976,7 +1100,7 @@ export default function ATSAnalyzer({
                 className={`flex-1 flex items-center justify-center gap-2 py-1.5 text-[11px] font-bold rounded transition disabled:opacity-30 ${
                   activeMode === 'preset' 
                     ? 'bg-white dark:bg-zinc-900 text-indigo-600 dark:text-indigo-400 shadow-xs' 
-                    : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-805'
+                    : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800'
                 }`}
               >
                 <FolderOpen className="w-3.5 h-3.5 text-zinc-500" />
@@ -1008,7 +1132,7 @@ export default function ATSAnalyzer({
                 {!file ? (
                   <>
                     <div className="w-10 h-10 bg-zinc-50 dark:bg-zinc-950 rounded-lg flex items-center justify-center text-zinc-500 mb-3 border border-zinc-250 dark:border-zinc-800">
-                      <Upload className="w-4 h-4 text-indigo-505 text-indigo-500" />
+                      <Upload className="w-4 h-4 text-indigo-500" />
                     </div>
                     <p className="text-xs font-bold text-zinc-900 dark:text-white mb-0.5">
                       Drop your resume here
@@ -1017,8 +1141,10 @@ export default function ATSAnalyzer({
                       Files supported: PDF, DOCX, or images (includes OCR reader).
                     </p>
                     <button
+                      type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-550 text-white text-[10px] font-bold rounded-lg shadow-sm transition cursor-pointer"
+                      className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold rounded-lg shadow-sm transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                      aria-label="Choose a resume file to upload"
                     >
                       Choose file
                     </button>
@@ -1034,14 +1160,18 @@ export default function ATSAnalyzer({
                     </p>
                     <div className="flex gap-2 justify-center mt-3">
                       <button
+                        type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        className="px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 text-zinc-700 dark:text-zinc-300 text-[10px] font-bold rounded cursor-pointer"
+                        className="px-2.5 py-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 text-zinc-700 dark:text-zinc-300 text-[10px] font-bold rounded cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                        aria-label="Choose a different resume file"
                       >
                         Change
                       </button>
                       <button
+                        type="button"
                         onClick={() => setFile(null)}
-                        className="px-2.5 py-1 bg-red-50 dark:bg-red-950/30 text-rose-500 text-[10px] font-bold rounded cursor-pointer transition"
+                        className="px-2.5 py-1 bg-red-50 dark:bg-red-950/30 text-rose-500 text-[10px] font-bold rounded cursor-pointer transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
+                        aria-label="Clear selected resume file"
                       >
                         Clear File
                       </button>
@@ -1076,7 +1206,9 @@ export default function ATSAnalyzer({
             {/* LAUNCH ENGINE TRIGGER */}
             <div className="mt-6">
               <button
+                type="button"
                 onClick={triggerATSAnalysis}
+                aria-label={scanType === 'general' ? 'Run local resume readability check' : 'Run AI job match'}
                 disabled={
                   (activeMode === 'upload' ? !file : !selectedResumeId) ||
                   (scanType === 'targeted' && jobDescription.trim().length < 50)
@@ -1084,7 +1216,7 @@ export default function ATSAnalyzer({
                 className="forge-ats-primary-button w-full"
               >
                 <Sparkles className="h-4 w-4" />
-                <span>{scanType === 'general' ? 'Run general ATS scan' : 'Run targeted ATS scan'}</span>
+                <span>{scanType === 'general' ? 'Run local readability check' : 'Run AI job match'}</span>
               </button>
             </div>
           </div>
@@ -1106,13 +1238,13 @@ export default function ATSAnalyzer({
                       setScanType(h.jobDescription.trim() ? 'targeted' : 'general');
                       setProgressStep('completed');
                       setIsSaved(true);
-                      showToasts(`Opened saved ATS report (${h.atsScore}% ATS).`, 'info');
+                      showToasts('Opened a legacy local report. Run a new check for current labels.', 'info');
                     }}
                     className="p-3 rounded-xl border border-gray-100 dark:border-gray-901 hover:border-indigo-400 bg-gray-50/40 dark:bg-gray-900/10 flex items-center justify-between cursor-pointer transition text-xs"
                   >
                     <div>
                       <span className="font-bold text-gray-800 dark:text-gray-200">
-                        ATS {h.atsScore}%{h.matchScore !== null ? ` · Match ${h.matchScore}%` : ''}
+                        Legacy local report
                       </span>
                       <span className="text-[10px] text-gray-400 block mt-0.5">{new Date(h.createdAt).toLocaleDateString()}</span>
                     </div>
@@ -1182,9 +1314,9 @@ export default function ATSAnalyzer({
           {progressStep === 'idle' && (
             <div className="rounded-3xl border-2 border-dashed border-gray-200 dark:border-gray-800 min-h-[460px] flex flex-col items-center justify-center p-8 text-center print:hidden">
               <TrendingUp className="w-12 h-12 text-gray-300 dark:text-gray-700 mb-4" />
-              <h3 className="font-bold text-base text-gray-900 dark:text-white">Measure ATS readiness</h3>
+              <h3 className="font-bold text-base text-gray-900 dark:text-white">Check resume readability</h3>
               <p className="text-xs text-gray-400 max-w-xs mt-1 mb-6">
-                Run a general score without a job description, or load a sample role for targeted matching.
+                Run a local structure check, or add a job description for AI-assisted matching.
               </p>
               <div className="flex gap-2 flex-wrap justify-center">
                 <button
@@ -1192,7 +1324,7 @@ export default function ATSAnalyzer({
                   onClick={() => setScanType('general')}
                   className="forge-ats-secondary-button"
                 >
-                  General scan
+                  Local check
                 </button>
                 <select
                   value={jdCategory}
@@ -1232,7 +1364,9 @@ export default function ATSAnalyzer({
 
                 <div className="flex flex-wrap items-center gap-2.5">
                   <button
+                    type="button"
                     onClick={handlePrint}
+                    aria-label="Print ATS report"
                     className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 text-gray-700 dark:text-gray-300 text-xs font-bold rounded-lg transition flex items-center gap-1.5 shadow-sm cursor-pointer"
                   >
                     <Printer className="w-3.5 h-3.5 text-indigo-500" />
@@ -1240,8 +1374,10 @@ export default function ATSAnalyzer({
                   </button>
 
                   <button
+                    type="button"
                     onClick={handleSaveToCloud}
-                    disabled={savingReport || isSaved}
+                    aria-label={isGuestUser ? 'ATS history save unavailable in guest mode' : 'Save ATS report to history'}
+                    disabled={isGuestUser || savingReport || isSaved}
                     className={`px-4 py-2 text-xs font-bold rounded-lg transition flex items-center gap-1.5 shadow-sm cursor-pointer ${
                       isSaved 
                         ? 'bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200/50 text-emerald-600' 
@@ -1255,11 +1391,25 @@ export default function ATSAnalyzer({
                     ) : (
                       <Save className="w-3.5 h-3.5" />
                     )}
-                    <span>{isSaved ? 'Archived to Cloud' : 'Save Report to History'}</span>
+                    <span>{isGuestUser ? 'Local Only in Guest Mode' : isSaved ? 'Archived to Cloud' : 'Save Report to History'}</span>
                   </button>
                 </div>
               </div>
 
+              <AtsDiagnosticsConsole
+                result={atsDiagnosticsResult}
+                isLoading={progressStep !== 'idle' && progressStep !== 'completed'}
+                onSuggestionAction={handleSuggestionAction}
+              />
+
+              <details hidden className="rounded-2xl border border-gray-200 bg-gray-50/60 dark:border-gray-800 dark:bg-gray-900/30">
+                <summary className="cursor-pointer px-4 py-3 text-xs font-bold text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 dark:text-gray-200">
+                  Additional deterministic diagnostics
+                  <span className="ml-2 font-normal text-gray-500 dark:text-gray-400">
+                    Local heuristic details; not AI analysis
+                  </span>
+                </summary>
+                <div className="space-y-6 border-t border-gray-200 p-4 dark:border-gray-800">
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.15fr_0.85fr]">
                 <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-xl shadow-gray-100/10 dark:border-gray-800 dark:bg-gray-950">
                   <span className="text-xs font-bold uppercase tracking-widest text-teal-600">
@@ -1384,6 +1534,7 @@ export default function ATSAnalyzer({
                       <button
                         type="button"
                         onClick={() => setIssueFilter('all')}
+                        aria-pressed={issueFilter === 'all'}
                         className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-wide ${issueFilter === 'all' ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900' : 'bg-gray-100 text-gray-600 dark:bg-gray-900 dark:text-gray-300'}`}
                       >
                         All issues
@@ -1391,6 +1542,7 @@ export default function ATSAnalyzer({
                       <button
                         type="button"
                         onClick={() => setIssueFilter('critical')}
+                        aria-pressed={issueFilter === 'critical'}
                         className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-wide ${issueFilter === 'critical' ? 'bg-rose-600 text-white' : 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-200'}`}
                       >
                         Critical only
@@ -1401,6 +1553,7 @@ export default function ATSAnalyzer({
                     <button
                       type="button"
                       onClick={() => setSectionIssueFilter('all')}
+                      aria-pressed={sectionIssueFilter === 'all'}
                       className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-wide ${sectionIssueFilter === 'all' ? 'border-cyan-300 bg-cyan-50 text-cyan-700 dark:border-cyan-800 dark:bg-cyan-950/30 dark:text-cyan-200' : 'border-gray-200 text-gray-500 dark:border-gray-800 dark:text-gray-400'}`}
                     >
                       All sections
@@ -1410,6 +1563,7 @@ export default function ATSAnalyzer({
                         key={section}
                         type="button"
                         onClick={() => setSectionIssueFilter(section)}
+                        aria-pressed={sectionIssueFilter === section}
                         className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-wide ${sectionIssueFilter === section ? 'border-cyan-300 bg-cyan-50 text-cyan-700 dark:border-cyan-800 dark:bg-cyan-950/30 dark:text-cyan-200' : 'border-gray-200 text-gray-500 dark:border-gray-800 dark:text-gray-400'}`}
                       >
                         {section}
@@ -1417,7 +1571,7 @@ export default function ATSAnalyzer({
                     ))}
                   </div>
                   <div className="mt-5 space-y-4">
-                    {Object.entries(groupedDiagnosticIssues).length > 0 ? Object.entries(groupedDiagnosticIssues).map(([category, issues]) => (
+                    {Object.entries(groupedDiagnosticIssues).length > 0 ? (Object.entries(groupedDiagnosticIssues) as [string, typeof filteredDiagnosticIssues][]).map(([category, issues]) => (
                       <div key={category} className="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900">
                         <div className="mb-3 flex items-center justify-between gap-3">
                           <h4 className="text-xs font-black uppercase tracking-widest text-gray-500 dark:text-gray-400">{category}</h4>
@@ -1431,7 +1585,7 @@ export default function ATSAnalyzer({
                                 <button
                                   type="button"
                                   onClick={() => toggleIssueExpanded(issue.id)}
-                                  className="flex w-full items-start justify-between gap-3 p-3 text-left"
+                                  className="flex w-full items-start justify-between gap-3 p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
                                 >
                                   <div>
                                     <div className="text-xs font-black text-gray-900 dark:text-white">{issue.title}</div>
@@ -1472,7 +1626,7 @@ export default function ATSAnalyzer({
                   </div>
                 </div>
 
-                <div className="space-y-6">
+                <div className="min-w-0 space-y-6">
                   <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-xl shadow-gray-100/10 dark:border-gray-800 dark:bg-gray-950">
                     <h3 className="text-sm font-black text-gray-900 dark:text-white">Language quality signals</h3>
                     <div className="mt-4 grid grid-cols-2 gap-3">
@@ -1877,6 +2031,8 @@ export default function ATSAnalyzer({
                 )}
               </div>
 
+                </div>
+              </details>
             </div>
           )}
         </div>

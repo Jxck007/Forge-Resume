@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ResumeData,
   ExperienceEntry,
@@ -9,6 +9,7 @@ import {
   CustomSectionItem,
   UserSettings,
   StandardSectionKey,
+  LinkDisplayMode,
 } from '../types';
 import {
   User,
@@ -32,12 +33,12 @@ import {
   Award,
   Globe,
   PlusCircle,
-  HelpCircle,
   Wand2,
   Star,
+  Pencil,
 } from 'lucide-react';
-import { aiImproveSummary, aiImproveExperience, aiImproveProject } from '../services/groq';
 import ConfirmationDialog from './ConfirmationDialog';
+import AiSuggestionReview from './ai/AiSuggestionReview';
 import {
   EDUCATION_SCORE_TYPES,
   getEducationScoreFieldLabel,
@@ -52,12 +53,16 @@ import {
   DEFAULT_SECTION_HEADINGS,
   resolveSectionHeading,
 } from '../utils/resolveSectionHeading';
+import { AiRewriteStyle, AiSuggestion } from '../ai/types';
+import { useAiSession } from '../contexts/AiSessionContext';
 
 interface ResumeBuilderProps {
   resume: ResumeData;
   onChange: (updatedResume: ResumeData) => void;
   settings: UserSettings;
   saving: boolean;
+  aiEnabled: boolean;
+  onOpenAiAssist?: () => void;
   showToasts: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
@@ -66,6 +71,8 @@ function ResumeBuilder({
   onChange,
   settings,
   saving,
+  aiEnabled,
+  onOpenAiAssist,
   showToasts,
 }: ResumeBuilderProps) {
   // Collapsible sections state
@@ -89,12 +96,23 @@ function ResumeBuilder({
     optimized: string;
     whatChanged: string[];
   } | null>(null);
-
-  const isAiConfigured = 
-    (settings?.aiProvider === 'Gemini' && settings?.geminiApiKey) ||
-    (settings?.aiProvider === 'OpenAI' && settings?.openaiApiKey) ||
-    (settings?.aiProvider === 'OpenRouter' && settings?.openRouterApiKey) ||
-    ((settings?.aiProvider === 'Groq' || !settings?.aiProvider) && settings?.groqApiKey);
+  const [aiSuggestion, setAiSuggestion] = useState<AiSuggestion | null>(null);
+  const [summaryRewriteStyle, setSummaryRewriteStyle] = useState<AiRewriteStyle>('professional');
+  const [bulletRewriteStyle, setBulletRewriteStyle] = useState<AiRewriteStyle>('stronger_verbs');
+  const aiApplyRef = useRef<(() => void) | null>(null);
+  const mountedRef = useRef(true);
+  const { state: aiState, generate, isGenerating } = useAiSession();
+  const isAiConfigured = aiEnabled && (
+    aiState.mode === 'free' || (aiState.mode === 'byok' && aiState.isConnected)
+  );
+  const isAiBusy = isGenerating || Object.values(aiLoading).some(Boolean);
+  const connectedProviderLabel = aiState.mode === 'free'
+    ? 'Forge Free Beta'
+    : aiState.provider === 'openrouter'
+    ? 'OpenRouter'
+    : aiState.provider
+      ? `${aiState.provider.charAt(0).toUpperCase()}${aiState.provider.slice(1)}`
+      : '';
 
   const [confirmConfig, setConfirmConfig] = useState<{
     isOpen: boolean;
@@ -111,6 +129,13 @@ function ResumeBuilder({
     type: 'warning',
     onConfirm: () => {}
   });
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const toggleSection = (sec: string) => {
     setOpenSections(prev => ({ ...prev, [sec]: !prev[sec] }));
@@ -133,6 +158,23 @@ function ResumeBuilder({
         [sectionKey]: {
           mode: mode === 'custom' && customTitle?.trim() ? 'custom' : mode,
           customTitle: customTitle ?? resume.sectionConfig[sectionKey]?.customTitle ?? '',
+          linkDisplayMode: resume.sectionConfig[sectionKey]?.linkDisplayMode,
+        },
+      },
+    });
+  };
+
+  const updateSectionLinkMode = (
+    sectionKey: StandardSectionKey,
+    linkDisplayMode: LinkDisplayMode
+  ) => {
+    onChange({
+      ...resume,
+      sectionConfig: {
+        ...resume.sectionConfig,
+        [sectionKey]: {
+          ...resume.sectionConfig[sectionKey],
+          linkDisplayMode,
         },
       },
     });
@@ -150,34 +192,24 @@ function ResumeBuilder({
     return (
       <div className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-3 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Section heading</span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Section title</span>
           <span className="rounded-full bg-[#171A21] px-2 py-0.5 text-[10px] font-semibold text-[#72DFCA]">
             Live title: {getSectionHeading(sectionKey)}
           </span>
         </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => updateSectionHeadingConfig(sectionKey, 'default', '')}
-            className={`rounded-lg border px-3 py-2 text-[11px] font-semibold transition ${
-              config?.mode !== 'custom'
-                ? 'border-[#72DFCA] bg-[#12312D] text-[#B5F5E8]'
-                : 'border-[#2A2E37] bg-[#171A21] text-zinc-300 hover:border-[#3A4B5E]'
-            }`}
-          >
-            Use default heading
-          </button>
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => updateSectionHeadingConfig(sectionKey, 'custom', config?.customTitle || getSectionHeading(sectionKey))}
-            className={`rounded-lg border px-3 py-2 text-[11px] font-semibold transition ${
-              config?.mode === 'custom'
-                ? 'border-[#72DFCA] bg-[#12312D] text-[#B5F5E8]'
-                : 'border-[#2A2E37] bg-[#171A21] text-zinc-300 hover:border-[#3A4B5E]'
-            }`}
+            className="inline-flex min-h-7 items-center gap-1 rounded-md border border-[#2A2E37] bg-[#171A21] px-2 py-1 text-[10px] font-semibold text-zinc-200 transition hover:border-[#3A4B5E]"
           >
-            Use custom heading
+            <Pencil className="h-2.5 w-2.5" /> Edit title
           </button>
+          {config?.mode === 'custom' && (
+            <button type="button" onClick={() => updateSectionHeadingConfig(sectionKey, 'default', '')} className="min-h-7 rounded-md px-2 py-1 text-[10px] font-semibold text-zinc-400 transition hover:bg-[#171A21] hover:text-white">
+              Return to template title
+            </button>
+          )}
         </div>
         {config?.mode === 'custom' && (
           <input
@@ -187,6 +219,36 @@ function ResumeBuilder({
             placeholder={DEFAULT_SECTION_HEADINGS[sectionKey]}
             className="w-full rounded-lg border border-[#2A2E37] bg-[#171A21] px-3 py-2 text-xs text-white outline-none focus:border-[#72DFCA]"
           />
+        )}
+        {['projects', 'certifications'].includes(sectionKey) && (
+          <div className="space-y-2 rounded-lg border border-[#2A2E37] bg-[#171A21] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Section link style</span>
+              <span className="text-[10px] text-zinc-400">
+                {resume.sectionConfig[sectionKey]?.linkDisplayMode || 'inherit'}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-1">
+              {([
+                ['inherit', 'Inherit'],
+                ['embedded', 'Embedded'],
+                ['raw', 'Raw'],
+              ] as const).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => updateSectionLinkMode(sectionKey, mode)}
+                  className={`rounded-md px-2 py-2 text-[10px] font-semibold transition ${
+                    (resume.sectionConfig[sectionKey]?.linkDisplayMode || 'inherit') === mode
+                      ? 'bg-[#72DFCA] text-[#08110F]'
+                      : 'text-zinc-300 hover:bg-[#0F1115]'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
         {headingIssues.length > 0 && (
           <div className="space-y-2 rounded-lg border border-amber-400/20 bg-amber-950/20 p-3">
@@ -216,52 +278,8 @@ function ResumeBuilder({
     );
   };
 
-  const renderSectionQualityPanel = (sectionKey: string) => {
-    const issues = getSectionIssues(sectionKey).filter(issue => !issue.path.startsWith(`sectionConfig.${sectionKey}`));
-    if (issues.length === 0) {
-      return (
-        <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/15 px-3 py-2 text-[11px] text-emerald-200">
-          No live spelling or grammar issues detected in this section.
-        </div>
-      );
-    }
-
-    return (
-      <div className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-3 space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Language review</span>
-          <span className="rounded-full bg-rose-950/30 px-2 py-0.5 text-[10px] font-semibold text-rose-200">
-            {issues.length} issue{issues.length === 1 ? '' : 's'}
-          </span>
-        </div>
-        <div className="space-y-3">
-          {issues.slice(0, 4).map(issue => (
-            <div key={issue.id} className="rounded-lg border border-[#2A2E37] bg-[#171A21] p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-[11px] font-semibold text-white">{issue.label}</div>
-                  <div className="mt-1 text-[11px] text-zinc-400">{issue.message}</div>
-                </div>
-                <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zinc-300">
-                  {issue.severity}
-                </span>
-              </div>
-              {issue.suggestions.slice(0, 1).map(suggestion => (
-                <button
-                  key={suggestion.id}
-                  type="button"
-                  onClick={() => applySuggestion(issue.id, suggestion.id)}
-                  className="mt-3 rounded-md border border-[#31413F] bg-[#10201E] px-2 py-1 text-[10px] font-semibold text-[#A7E9DC] transition hover:bg-[#14302C]"
-                >
-                  {suggestion.label}
-                </button>
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
+  // Language analysis is paused until it is backed by a validated provider result.
+  const renderSectionQualityPanel = (_sectionKey: string) => null;
 
   const updatePersonal = (field: string, val: string) => {
     // Basic validation check
@@ -281,6 +299,77 @@ function ResumeBuilder({
 
   const updateSummary = (val: string) => {
     onChange({ ...resume, summary: val });
+  };
+
+  const openAiSuggestion = (suggestion: AiSuggestion, onApply: () => void) => {
+    aiApplyRef.current = onApply;
+    setAiSuggestion(suggestion);
+  };
+
+  const closeAiSuggestion = () => {
+    aiApplyRef.current = null;
+    setAiSuggestion(null);
+  };
+
+  const handleApplyAiSuggestion = () => {
+    aiApplyRef.current?.();
+    closeAiSuggestion();
+    showToasts('AI suggestion applied.', 'success');
+  };
+
+  const runAiRewrite = async ({
+    loadingKey,
+    task,
+    input,
+    tone,
+    rewriteStyle,
+    targetLabel,
+    getCurrentText,
+    onApply,
+  }: {
+    loadingKey: string;
+    task: 'improve_summary' | 'rewrite_bullet' | 'suggest_wording' | 'grammar_fix';
+    input: string;
+    tone: 'professional' | 'simple' | 'student' | 'impactful';
+    rewriteStyle?: AiRewriteStyle;
+    targetLabel: string;
+    getCurrentText: () => string;
+    onApply: (value: string) => void;
+  }) => {
+    const originalText = input.trim();
+    if (!originalText) {
+      showToasts('Add some text before using AI writing help.', 'info');
+      return;
+    }
+
+    setAiLoading(current => ({ ...current, [loadingKey]: true }));
+    try {
+      const result = await generate({
+        task,
+        input: originalText,
+        tone,
+        rewriteStyle,
+        maxOutputTokens: 1200,
+      });
+      if (!mountedRef.current) return;
+      if (getCurrentText().trim() !== originalText) {
+        showToasts('This field changed while AI was responding. Run the action again on the latest text.', 'info');
+        return;
+      }
+      openAiSuggestion({
+        id: `${loadingKey}_${Date.now()}`,
+        task,
+        originalText,
+        suggestedText: result.text.trim(),
+        targetLabel,
+      }, () => onApply(result.text.trim()));
+    } catch (error) {
+      showToasts(error instanceof Error ? error.message : 'AI request failed. Check your key, provider, or model and try again.', 'error');
+    } finally {
+      if (mountedRef.current) {
+        setAiLoading(current => ({ ...current, [loadingKey]: false }));
+      }
+    }
   };
 
   // Section Order Shifts
@@ -417,26 +506,23 @@ function ResumeBuilder({
     onChange({ ...resume, internships: arr });
   };
 
-  const triggerAiInternship = async (id: string, action: 'improve' | 'professional' | 'metrics' | 'ats') => {
+  const triggerAiInternship = async (id: string, rewriteStyle: AiRewriteStyle = bulletRewriteStyle) => {
     if (!isAiConfigured) {
-      showToasts('Please configure an AI Provider API Key in Settings.', 'error');
+      showToasts('Choose Forge Free Beta AI or connect BYOK to use writing help.', 'info');
       return;
     }
-    const intern = (resume.internships || []).find(i => i.id === id);
-    if (!intern || !intern.description.trim()) {
-      showToasts('Please enter current description bullets first.', 'info');
-      return;
-    }
-    setAiLoading(prev => ({ ...prev, [`intern_${id}_${action}`]: true }));
-    try {
-      const output = await aiImproveExperience(settings, intern.description, action);
-      updateInternship(id, 'description', output);
-      showToasts('Internship points improved!', 'success');
-    } catch (err: any) {
-      showToasts(err?.message || 'AI request failed.', 'error');
-    } finally {
-      setAiLoading(prev => ({ ...prev, [`intern_${id}_${action}`]: false }));
-    }
+    const entry = (resume.internships || []).find(item => item.id === id);
+    if (!entry) return;
+    await runAiRewrite({
+      loadingKey: `intern_${id}_rewrite`,
+      task: rewriteStyle === 'grammar_fix' ? 'grammar_fix' : 'rewrite_bullet',
+      input: entry.description,
+      tone: 'student',
+      rewriteStyle,
+      targetLabel: `${getSectionHeading('internships')} bullet`,
+      getCurrentText: () => (resume.internships || []).find(item => item.id === id)?.description || '',
+      onApply: value => updateInternship(id, 'description', value),
+    });
   };
 
   const duplicateExperience = (entry: ExperienceEntry) => {
@@ -677,98 +763,68 @@ function ResumeBuilder({
   };
 
   // AI Actions Triggering
-  const triggerAiSummary = async (action: 'improve' | 'shorten' | 'expand' | 'ats') => {
+  const triggerAiSummary = async (rewriteStyle: AiRewriteStyle = summaryRewriteStyle) => {
     if (!isAiConfigured) {
-      showToasts('Please configure an AI Provider API Key in Settings to execute AI commands.', 'error');
+      showToasts('Choose Forge Free Beta AI or connect BYOK to use writing help.', 'info');
       return;
     }
-    if (!resume.summary.trim()) {
-      showToasts('Please write a base summary first so the AI has context.', 'info');
-      return;
-    }
-    setAiLoading(prev => ({ ...prev, [`summary_${action}`]: true }));
-    try {
-      const output = await aiImproveSummary(settings, resume.summary, action, resume.personalDetails.professionalTitle);
-      if (action === 'ats') {
-        try {
-          const parsed = JSON.parse(output);
-          setAtsSummaryDetails({
-            original: parsed.original || resume.summary,
-            optimized: parsed.optimized || '',
-            whatChanged: Array.isArray(parsed.whatChanged) ? parsed.whatChanged : ['Readability improvements', 'Word count optimization']
-          });
-          showToasts('ATS summary evaluation done! Please review the optimization report.', 'success');
-        } catch {
-          // fallback
-          setAtsSummaryDetails({
-            original: resume.summary,
-            optimized: output,
-            whatChanged: ['Polished formatting', 'Word count alignment']
-          });
-          showToasts('ATS summary evaluation completed.', 'success');
-        }
-      } else {
-        updateSummary(output);
-        showToasts('Summary polished through Groq AI!', 'success');
-      }
-    } catch (err: any) {
-      showToasts(err?.message || 'AI request failed.', 'error');
-    } finally {
-      setAiLoading(prev => ({ ...prev, [`summary_${action}`]: false }));
-    }
+    await runAiRewrite({
+      loadingKey: 'summary_rewrite',
+      task: 'improve_summary',
+      input: resume.summary,
+      tone: 'professional',
+      rewriteStyle,
+      targetLabel: getSectionHeading('summary'),
+      getCurrentText: () => resume.summary,
+      onApply: updateSummary,
+    });
   };
 
-  const triggerAiExperience = async (id: string, action: 'improve' | 'professional' | 'metrics' | 'ats') => {
+  const triggerAiExperience = async (id: string, rewriteStyle: AiRewriteStyle = bulletRewriteStyle) => {
     if (!isAiConfigured) {
-      showToasts('Please configure an AI Provider API Key in Settings.', 'error');
+      showToasts('Choose Forge Free Beta AI or connect BYOK to use writing help.', 'info');
       return;
     }
-    const exp = resume.experience.find(e => e.id === id);
-    if (!exp || !exp.description.trim()) {
-      showToasts('Please enter current description bullets first.', 'info');
-      return;
-    }
-    setAiLoading(prev => ({ ...prev, [`exp_${id}_${action}`]: true }));
-    try {
-      const output = await aiImproveExperience(settings, exp.description, action);
-      updateExperience(id, 'description', output);
-      showToasts('Experience points improved!', 'success');
-    } catch (err: any) {
-      showToasts(err?.message || 'AI request failed.', 'error');
-    } finally {
-      setAiLoading(prev => ({ ...prev, [`exp_${id}_${action}`]: false }));
-    }
+    const entry = resume.experience.find(item => item.id === id);
+    if (!entry) return;
+    await runAiRewrite({
+      loadingKey: `exp_${id}_rewrite`,
+      task: rewriteStyle === 'grammar_fix' ? 'grammar_fix' : 'rewrite_bullet',
+      input: entry.description,
+      tone: 'impactful',
+      rewriteStyle,
+      targetLabel: `${getSectionHeading('experience')} bullet`,
+      getCurrentText: () => resume.experience.find(item => item.id === id)?.description || '',
+      onApply: value => updateExperience(id, 'description', value),
+    });
   };
 
-  const triggerAiProject = async (id: string, action: 'rewrite' | 'ats') => {
+  const triggerAiProject = async (id: string, rewriteStyle: AiRewriteStyle = bulletRewriteStyle) => {
     if (!isAiConfigured) {
-      showToasts('Please configure an AI Provider API Key in Settings.', 'error');
+      showToasts('Choose Forge Free Beta AI or connect BYOK to use writing help.', 'info');
       return;
     }
-    const proj = resume.projects.find(p => p.id === id);
-    if (!proj || !proj.description.trim()) {
-      showToasts('Please enter a short project description first.', 'info');
-      return;
-    }
-    setAiLoading(prev => ({ ...prev, [`proj_${id}_${action}`]: true }));
-    try {
-      const output = await aiImproveProject(settings, proj.description, action);
-      updateProject(id, 'description', output);
-      showToasts('Project text rewritten!', 'success');
-    } catch (err: any) {
-      showToasts(err?.message || 'AI request failed.', 'error');
-    } finally {
-      setAiLoading(prev => ({ ...prev, [`proj_${id}_${action}`]: false }));
-    }
+    const entry = resume.projects.find(item => item.id === id);
+    if (!entry) return;
+    await runAiRewrite({
+      loadingKey: `proj_${id}_rewrite`,
+      task: rewriteStyle === 'grammar_fix' ? 'grammar_fix' : 'suggest_wording',
+      input: entry.description,
+      tone: 'impactful',
+      rewriteStyle,
+      targetLabel: `${getSectionHeading('projects')} description`,
+      getCurrentText: () => resume.projects.find(item => item.id === id)?.description || '',
+      onApply: value => updateProject(id, 'description', value),
+    });
   };
 
   return (
-    <div className="forge-editor-panel space-y-6" id="resume-builder-form-panel">
+    <div className="forge-editor-panel space-y-6" id="resume-builder-form-panel" data-tour="builder-editor">
       {/* Auto save banner info */}
       <div className="flex items-center justify-between bg-[#0F1115] border border-[#2A2E37] p-3.5 rounded-xl">
         <div>
           <h4 className="text-xs font-bold text-white">Autosave</h4>
-          <span className="text-[10px] text-zinc-400">Changes are saved securely as you work</span>
+          <span className="text-[10px] text-zinc-400">Changes are saved as you work</span>
         </div>
         <div className="flex items-center gap-1.5">
           {saving ? (
@@ -785,23 +841,27 @@ function ResumeBuilder({
         </div>
       </div>
 
-      <div className="rounded-2xl border border-[#2A2E37] bg-[#171A21] p-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-[#72DFCA]">
-              <HelpCircle className="h-4 w-4" />
-              <span>Live Language Intelligence</span>
-            </div>
-            <p className="mt-1 text-xs text-zinc-400">
-              Editor, preview, PDF, and ATS review all consume the same live language-quality state.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2 text-[11px] font-semibold">
-            <span className="rounded-full bg-[#10201E] px-3 py-1 text-[#A7E9DC]">Score {resume.languageQuality.score}/100</span>
-            <span className="rounded-full bg-[#171E28] px-3 py-1 text-zinc-300">{resume.languageQuality.summary.total} open issues</span>
-            <span className="rounded-full bg-rose-950/30 px-3 py-1 text-rose-200">{resume.languageQuality.summary.highSeverity} high severity</span>
-          </div>
+      <div className="flex flex-col gap-2 rounded-xl border border-[#2A2E37] bg-[#171A21] p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <h4 className="flex items-center gap-2 text-xs font-semibold text-white">
+            <Sparkles className="h-3.5 w-3.5 text-emerald-300" />
+            {isAiConfigured ? `AI connected and ready · ${connectedProviderLabel}` : 'AI Assist Beta'}
+          </h4>
+          <p className="mt-1 text-[11px] text-zinc-400">
+            {!aiEnabled
+              ? 'Sign in to use Forge Free Beta AI or BYOK Assist.'
+              : isAiConfigured
+                ? aiState.mode === 'free' && aiState.freeActionsRemaining !== null
+                  ? `${aiState.freeActionsRemaining} free actions remaining today. Suggestions always require approval.`
+                  : 'Suggestions always require your approval before applying.'
+                : 'Choose Free Beta AI or connect a session-only provider.'}
+          </p>
         </div>
+        {aiEnabled && !isAiConfigured && onOpenAiAssist && (
+          <button type="button" onClick={onOpenAiAssist} className="inline-flex min-h-8 shrink-0 items-center justify-center rounded-lg border border-[#344354] px-3 text-[11px] font-semibold text-zinc-200 transition hover:border-emerald-500/40 hover:text-white">
+            Open AI Assist
+          </button>
+        )}
       </div>
 
       {/* RENDER SECTIONS DYNAMICALLY ACCORDING TO REORDER SEQUENCE */}
@@ -812,7 +872,7 @@ function ResumeBuilder({
           onClick={() => toggleSection('personal')}
           className="flex w-full items-center justify-between p-4 bg-[#0F1115] text-left outline-none cursor-pointer"
         >
-          <div className="flex items-center gap-2.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-2.5">
             <User className="h-4.5 w-4.5 text-indigo-500" />
             <h3 className="text-sm font-bold text-white">Personal Contact Details</h3>
           </div>
@@ -831,7 +891,7 @@ function ResumeBuilder({
                 value={resume.personalDetails.fullName}
                 onChange={e => updatePersonal('fullName', e.target.value)}
                 placeholder="e.g., Jane Smith"
-                className={`w-full px-3 py-2 rounded-lg border bg-[#0F1115] text-xs focus:focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none ${
+                className={`w-full px-3 py-2 rounded-lg border bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none ${
                   !resume.personalDetails.fullName ? 'border-rose-200 border-rose-900/50' : 'border-[#2A2E37]'
                 }`}
                 id="personal-fullName"
@@ -850,7 +910,7 @@ function ResumeBuilder({
                 value={resume.personalDetails.email}
                 onChange={e => updatePersonal('email', e.target.value)}
                 placeholder="jane.smith@email.com"
-                className={`w-full px-3 py-2 rounded-lg border bg-[#0F1115] text-xs focus:focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none ${
+                className={`w-full px-3 py-2 rounded-lg border bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none ${
                   !resume.personalDetails.email ? 'border-rose-200 border-rose-900/50' : 'border-[#2A2E37]'
                 }`}
                 id="personal-email"
@@ -860,13 +920,13 @@ function ResumeBuilder({
               )}
             </div>
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">Professional Title</label>
+              <label className="mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400"><Pencil className="h-2.5 w-2.5" /> Professional Title</label>
               <input
                 type="text"
                 value={resume.personalDetails.professionalTitle}
                 onChange={e => updatePersonal('professionalTitle', e.target.value)}
                 placeholder="e.g., Lead Solutions Architect"
-                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
+                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
                 id="personal-title"
               />
             </div>
@@ -877,7 +937,7 @@ function ResumeBuilder({
                 value={resume.personalDetails.phone}
                 onChange={e => updatePersonal('phone', e.target.value)}
                 placeholder="+1 (555) 0192-283"
-                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
+                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
                 id="personal-phone"
               />
             </div>
@@ -888,7 +948,7 @@ function ResumeBuilder({
                 value={resume.personalDetails.location}
                 onChange={e => updatePersonal('location', e.target.value)}
                 placeholder="SF Bay Area, CA"
-                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
+                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
                 id="personal-location"
               />
             </div>
@@ -899,7 +959,7 @@ function ResumeBuilder({
                 value={resume.personalDetails.linkedin}
                 onChange={e => updatePersonal('linkedin', e.target.value)}
                 placeholder="linkedin.com/in/janesmith"
-                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
+                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
                 id="personal-linkedin"
               />
             </div>
@@ -910,7 +970,7 @@ function ResumeBuilder({
                 value={resume.personalDetails.github}
                 onChange={e => updatePersonal('github', e.target.value)}
                 placeholder="github.com/janesmith"
-                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
+                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
                 id="personal-github"
               />
             </div>
@@ -921,7 +981,7 @@ function ResumeBuilder({
                 value={resume.personalDetails.website}
                 onChange={e => updatePersonal('website', e.target.value)}
                 placeholder="janesmith.dev"
-                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
+                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
                 id="personal-website"
               />
             </div>
@@ -935,7 +995,11 @@ function ResumeBuilder({
                   <button
                     key={mode}
                     type="button"
-                    onClick={() => onChange({ ...resume, linkDisplayMode: mode })}
+                    onClick={() => onChange({
+                      ...resume,
+                      linkDisplayMode: mode,
+                      linkSettings: { defaultDisplayMode: mode },
+                    })}
                     className={`rounded-md px-3 py-2 text-[11px] font-semibold transition ${
                       resume.linkDisplayMode === mode
                         ? 'bg-[#72DFCA] text-[#08110F]'
@@ -957,7 +1021,7 @@ function ResumeBuilder({
                 value={resume.personalDetails.profilePhoto || ''}
                 onChange={e => updatePersonal('profilePhoto', e.target.value)}
                 placeholder="data:image/png;base64,... or enter public URL"
-                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none font-mono"
+                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none font-mono"
                 id="personal-profilePhoto"
               />
             </div>
@@ -1013,25 +1077,20 @@ function ResumeBuilder({
         if (sectionId === 'summary') {
           return (
             <div key={sectionId} className={`rounded-2xl border ${isHidden ? 'opacity-50 border-dashed border-[#2A2E37]' : 'border-[#2A2E37]'} bg-[#171A21] overflow-hidden`}>
-              <div className="flex items-center justify-between p-4 bg-[#0F1115]">
-                <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#0F1115]">
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
                   <UserCheck className="h-4.5 w-4.5 text-indigo-500" />
                   <h3 className="text-sm font-bold text-white">{getSectionHeading('summary')}</h3>
-                  {getSectionIssues('summary').length > 0 && (
-                    <span className="rounded-full bg-rose-950/30 px-2 py-0.5 text-[10px] font-bold text-rose-200">
-                      {getSectionIssues('summary').length}
-                    </span>
-                  )}
                   {isHidden && <span className="text-[10px] bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-400">Hidden</span>}
                 </div>
                 {/* Control Tools */}
-                <div className="flex items-center space-x-1.5">
-                  <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => moveSection(idx, 'down')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => toggleSectionVisibility(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer">
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  <button type="button" onClick={() => moveSection(idx, 'up')} aria-label={`Move ${sectionId} section up`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => moveSection(idx, 'down')} aria-label={`Move ${sectionId} section down`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => toggleSectionVisibility(sectionId)} aria-label={`${isHidden ? 'Show' : 'Hide'} ${sectionId} section`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer">
                     {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
-                  <button onClick={() => toggleSection(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => toggleSection(sectionId)} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${sectionId} section`} aria-expanded={isOpen} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
                 </div>
               </div>
 
@@ -1046,49 +1105,39 @@ function ResumeBuilder({
                       onChange={e => updateSummary(e.target.value)}
                       rows={5}
                       placeholder="Results-focused Software Architect with over 8 years of engineering accomplishments..."
-                      className="w-full px-3 py-2.5 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none font-sans"
+                      className="w-full px-3 py-2.5 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none font-sans"
                     />
                   </div>
 
-                  {/* Groq AI Tools Row */}
-                  <div className="flex flex-wrap items-center gap-1.5 bg-indigo-500/10 bg-indigo-950/25 border border-indigo-500/20 border-indigo-900/40 p-2 rounded-xl">
+                  {/* AI Assist Beta */}
+                  {isAiConfigured && <div className="flex flex-wrap items-center gap-1.5 bg-indigo-500/10 bg-indigo-950/25 border border-indigo-500/20 border-indigo-900/40 p-2 rounded-xl">
                     <span className="text-[9px] uppercase tracking-wider font-bold text-indigo-500 flex items-center gap-1 pl-1">
                       <Sparkles className="h-3 w-3 fill-current" />
-                      <span>Groq AI Actions:</span>
+                      <span>AI Assist:</span>
                     </span>
+                    <select
+                      value={summaryRewriteStyle}
+                      onChange={event => setSummaryRewriteStyle(event.target.value as AiRewriteStyle)}
+                      disabled={isAiBusy}
+                      aria-label="Summary rewrite style"
+                      className="min-h-7 max-w-full rounded border border-indigo-500/20 bg-[#171A21] px-2 text-[10px] font-semibold text-zinc-200 outline-none"
+                    >
+                      <option value="professional">Professional</option>
+                      <option value="ats_friendly">ATS-friendly wording</option>
+                      <option value="shorter">Shorter</option>
+                      <option value="longer">Longer</option>
+                      <option value="student_friendly">Student-friendly</option>
+                      <option value="impactful">Impactful</option>
+                    </select>
                     <button
-                      onClick={() => triggerAiSummary('improve')}
-                      disabled={aiLoading.summary_improve}
+                      onClick={() => triggerAiSummary()}
+                      disabled={isAiBusy}
                       className="px-2 py-1 rounded bg-[#171A21] hover:bg-[#1f232c] border border-indigo-500/20 border-indigo-900 bg-indigo-950 text-[10px] font-semibold text-indigo-400 text-indigo-300 transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
                     >
-                      {aiLoading.summary_improve ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Wand2 className="h-2.5 w-2.5" />}
-                      <span>Polished Smart</span>
+                      {aiLoading.summary_rewrite ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Wand2 className="h-2.5 w-2.5" />}
+                      <span>Improve Summary</span>
                     </button>
-                    <button
-                      onClick={() => triggerAiSummary('shorten')}
-                      disabled={aiLoading.summary_shorten}
-                      className="px-2 py-1 rounded bg-[#171A21] hover:bg-zinc-800 shadow-xs text-[10px] border border-[#2A2E37] text-zinc-400 bg-gray-900 border-gray-800 text-gray-300 transition cursor-pointer flex items-center gap-1 disabled:opacity-50"
-                    >
-                      {aiLoading.summary_shorten && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
-                      <span>Shorten</span>
-                    </button>
-                    <button
-                      onClick={() => triggerAiSummary('expand')}
-                      disabled={aiLoading.summary_expand}
-                      className="px-2 py-1 rounded bg-[#171A21] hover:bg-zinc-800 shadow-xs text-[10px] border border-[#2A2E37] text-zinc-400 bg-gray-900 border-gray-800 text-gray-300 transition cursor-pointer flex items-center gap-1 disabled:opacity-50"
-                    >
-                      {aiLoading.summary_expand && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
-                      <span>Expand</span>
-                    </button>
-                    <button
-                      onClick={() => triggerAiSummary('ats')}
-                      disabled={aiLoading.summary_ats}
-                      className="px-2 py-1 rounded bg-gradient-to-r from-violet-500 to-indigo-600 hover:opacity-90 text-[10px] font-bold text-white transition cursor-pointer flex items-center gap-1 disabled:opacity-50"
-                    >
-                      {aiLoading.summary_ats ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Sparkles className="h-2.5 w-2.5" />}
-                      <span>ATS Optimize</span>
-                    </button>
-                  </div>
+                  </div>}
                 </div>
               )}
             </div>
@@ -1098,24 +1147,19 @@ function ResumeBuilder({
         if (sectionId === 'experience') {
           return (
             <div key={sectionId} className={`rounded-2xl border ${isHidden ? 'opacity-50 border-dashed border-[#2A2E37]' : 'border-[#2A2E37]'} bg-[#171A21] overflow-hidden`}>
-              <div className="flex items-center justify-between p-4 bg-[#0F1115]">
-                <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#0F1115]">
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
                   <Briefcase className="h-4.5 w-4.5 text-indigo-500" />
                   <h3 className="text-sm font-bold text-white">{getSectionHeading('experience')}</h3>
                   <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-500">{resume.experience.length}</span>
-                  {getSectionIssues('experience').length > 0 && (
-                    <span className="rounded-full bg-rose-950/30 px-2 py-0.5 text-[10px] font-bold text-rose-200">
-                      {getSectionIssues('experience').length}
-                    </span>
-                  )}
                 </div>
-                <div className="flex items-center space-x-1.5">
-                  <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => moveSection(idx, 'down')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => toggleSectionVisibility(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer">
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  <button type="button" onClick={() => moveSection(idx, 'up')} aria-label={`Move ${sectionId} section up`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => moveSection(idx, 'down')} aria-label={`Move ${sectionId} section down`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => toggleSectionVisibility(sectionId)} aria-label={`${isHidden ? 'Show' : 'Hide'} ${sectionId} section`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer">
                     {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
-                  <button onClick={() => toggleSection(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => toggleSection(sectionId)} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${sectionId} section`} aria-expanded={isOpen} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
                 </div>
               </div>
 
@@ -1124,19 +1168,23 @@ function ResumeBuilder({
                   {renderHeadingControls('experience')}
                   {renderSectionQualityPanel('experience')}
                   {resume.experience.map((e, eIdx) => (
-                    <div key={e.id} className="p-4.5 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
-                      <div className="absolute top-3 right-3 flex items-center space-x-1 opacity-0 group-hover/card:opacity-100 transition">
+                    <div key={e.id} className="p-4 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
+                      <div className="absolute right-3 top-3 flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover/card:opacity-100 transition">
                         <button
+                          type="button"
                           onClick={() => duplicateExperience(e)}
-                          className="p-1 hover:bg-[#171A21] hover:bg-gray-950 rounded text-zinc-400 hover:text-zinc-400 transition"
+                          className="rounded p-1 text-zinc-400 transition hover:bg-[#171A21] hover:bg-gray-950 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
                           title="Duplicate Job Entry"
+                          aria-label={`Duplicate experience entry ${eIdx + 1}`}
                         >
                           <Copy className="h-3.5 w-3.5" />
                         </button>
                         <button
+                          type="button"
                           onClick={() => deleteExperience(e.id)}
-                          className="p-1 hover:bg-rose-50 hover:bg-rose-950/20 rounded text-zinc-400 hover:text-rose-600 transition"
+                          className="rounded p-1 text-zinc-400 transition hover:bg-rose-50 hover:bg-rose-950/20 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
                           title="Remove Job Entry"
+                          aria-label={`Remove experience entry ${eIdx + 1}`}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -1197,19 +1245,20 @@ function ResumeBuilder({
                         <div className="sm:col-span-2">
                           <div className="flex items-center justify-between mb-1.5">
                             <label className="block text-[10px] font-bold text-zinc-400">Job Responsibilities & Accomplishments</label>
-                            <button
-                              type="button"
-                              onClick={() => triggerAiExperience(e.id, 'improve')}
-                              disabled={aiLoading[`exp_${e.id}_improve`]}
-                              className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50 shadow-xs"
-                            >
-                              {aiLoading[`exp_${e.id}_improve`] ? (
-                                <Loader2 className="h-3 w-3 animate-spin text-white" />
-                              ) : (
-                                <Sparkles className="h-3 w-3 text-indigo-200 fill-current" />
-                              )}
-                              <span>Improve with AI</span>
-                            </button>
+                            {isAiConfigured && <div className="flex flex-wrap items-center justify-end gap-1.5">
+                              <select value={bulletRewriteStyle} onChange={event => setBulletRewriteStyle(event.target.value as AiRewriteStyle)} disabled={isAiBusy} aria-label="Experience rewrite style" className="min-h-7 rounded-lg border border-[#2A2E37] bg-[#0F1115] px-2 text-[10px] font-semibold text-zinc-300 outline-none">
+                                <option value="star_format">STAR format</option>
+                                <option value="stronger_verbs">Stronger action verbs</option>
+                                <option value="shorter">Shorter</option>
+                                <option value="professional">More professional</option>
+                                <option value="grammar_fix">Grammar fix</option>
+                                <option value="explain_impact">Explain impact clearly</option>
+                              </select>
+                              <button type="button" onClick={() => triggerAiExperience(e.id)} disabled={isAiBusy} className="flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-bold text-white transition hover:bg-indigo-700 disabled:opacity-50">
+                                {aiLoading[`exp_${e.id}_rewrite`] ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                                <span>Rewrite</span>
+                              </button>
+                            </div>}
                           </div>
                           <textarea
                             value={e.description}
@@ -1221,45 +1270,6 @@ function ResumeBuilder({
                         </div>
                       </div>
 
-                      {/* Groq experience points enhancements */}
-                      <div className="flex flex-wrap items-center gap-1 bg-indigo-500/10 bg-indigo-950/20 border border-indigo-500/20 border-indigo-900/30 p-2 rounded-xl">
-                        <span className="text-[9px] uppercase tracking-wider font-bold text-indigo-500 mr-2 flex items-center gap-1">
-                          <Sparkles className="h-2.5 w-2.5 text-indigo-500" />
-                          <span>Enhance Job Points:</span>
-                        </span>
-                        <button
-                          onClick={() => triggerAiExperience(e.id, 'improve')}
-                          disabled={aiLoading[`exp_${e.id}_improve`]}
-                          className="px-2 py-0.5 rounded bg-[#171A21] hover:bg-[#1f232c] border border-indigo-500/20 border-indigo-900 bg-indigo-950 text-[10px] font-semibold text-indigo-400 text-indigo-300 transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                        >
-                          {aiLoading[`exp_${e.id}_improve`] && <Loader2 className="h-2 w-2 animate-spin" />}
-                          <span>STAR bullets</span>
-                        </button>
-                        <button
-                          onClick={() => triggerAiExperience(e.id, 'professional')}
-                          disabled={aiLoading[`exp_${e.id}_professional`]}
-                          className="px-2 py-0.5 rounded bg-[#171A21] hover:bg-zinc-800 border border-zinc-700 text-zinc-400 bg-gray-900 border-gray-850 text-gray-300 text-[10px] cursor-pointer flex items-center gap-1"
-                        >
-                          {aiLoading[`exp_${e.id}_professional`] && <Loader2 className="h-2 w-2 animate-spin" />}
-                          <span>Professional Tone</span>
-                        </button>
-                        <button
-                          onClick={() => triggerAiExperience(e.id, 'metrics')}
-                          disabled={aiLoading[`exp_${e.id}_metrics`]}
-                          className="px-2 py-0.5 rounded bg-[#171A21] hover:bg-zinc-800 border border-zinc-700 text-zinc-400 bg-gray-900 border-gray-850 text-gray-300 text-[10px] cursor-pointer flex items-center gap-1"
-                        >
-                          {aiLoading[`exp_${e.id}_metrics`] && <Loader2 className="h-2 w-2 animate-spin" />}
-                          <span>Inject Metrics</span>
-                        </button>
-                        <button
-                          onClick={() => triggerAiExperience(e.id, 'ats')}
-                          disabled={aiLoading[`exp_${e.id}_ats`]}
-                          className="px-2 py-0.5 rounded bg-gradient-to-r from-violet-500 to-indigo-600 text-[10px] font-bold text-white transition flex items-center gap-1 cursor-pointer"
-                        >
-                          {aiLoading[`exp_${e.id}_ats`] && <Loader2 className="h-2 w-2 animate-spin" />}
-                          <span>ATS Matches</span>
-                        </button>
-                      </div>
                     </div>
                   ))}
 
@@ -1280,19 +1290,19 @@ function ResumeBuilder({
           const list = resume.internships || [];
           return (
             <div key={sectionId} className={`rounded-2xl border ${isHidden ? 'opacity-50 border-dashed border-[#2A2E37]' : 'border-[#2A2E37]'} bg-[#171A21] overflow-hidden`}>
-              <div className="flex items-center justify-between p-4 bg-[#0F1115]">
-                <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#0F1115]">
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
                   <Star className="h-4.5 w-4.5 text-indigo-400" />
                   <h3 className="text-sm font-bold text-white">{getSectionHeading('internships')}</h3>
                   <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-500">{list.length}</span>
                 </div>
-                <div className="flex items-center space-x-1.5">
-                  <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => moveSection(idx, 'down')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => toggleSectionVisibility(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer">
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  <button type="button" onClick={() => moveSection(idx, 'up')} aria-label={`Move ${sectionId} section up`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => moveSection(idx, 'down')} aria-label={`Move ${sectionId} section down`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => toggleSectionVisibility(sectionId)} aria-label={`${isHidden ? 'Show' : 'Hide'} ${sectionId} section`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer">
                     {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
-                  <button onClick={() => toggleSection(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => toggleSection(sectionId)} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${sectionId} section`} aria-expanded={isOpen} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
                 </div>
               </div>
 
@@ -1301,8 +1311,8 @@ function ResumeBuilder({
                   {renderHeadingControls('internships')}
                   {renderSectionQualityPanel('internships')}
                   {list.map((i, iIdx) => (
-                    <div key={i.id} className="p-4.5 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
-                      <div className="absolute top-3 right-3 flex items-center space-x-1 opacity-0 group-hover/card:opacity-100 transition">
+                    <div key={i.id} className="p-4 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
+                      <div className="absolute right-3 top-3 flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover/card:opacity-100 transition">
                         <div className="flex items-center space-x-1 border border-[#2A2E37] rounded-lg p-0.5 bg-[#171A21]">
                           <button
                             onClick={() => moveInternship(iIdx, 'up')}
@@ -1395,19 +1405,20 @@ function ResumeBuilder({
                         <div className="sm:col-span-2">
                           <div className="flex items-center justify-between mb-1.5">
                             <label className="block text-[10px] font-bold text-zinc-400">Description & Accomplishments</label>
-                            <button
-                              type="button"
-                              onClick={() => triggerAiInternship(i.id, 'improve')}
-                              disabled={aiLoading[`intern_${i.id}_improve`]}
-                              className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                            >
-                              {aiLoading[`intern_${i.id}_improve`] ? (
-                                <Loader2 className="h-3 w-3 animate-spin text-white" />
-                              ) : (
-                                <Sparkles className="h-3 w-3 text-indigo-200 fill-current" />
-                              )}
-                              <span>Improve with AI</span>
-                            </button>
+                            {isAiConfigured && <div className="flex flex-wrap items-center justify-end gap-1.5">
+                              <select value={bulletRewriteStyle} onChange={event => setBulletRewriteStyle(event.target.value as AiRewriteStyle)} disabled={isAiBusy} aria-label="Internship rewrite style" className="min-h-7 rounded-lg border border-[#2A2E37] bg-[#0F1115] px-2 text-[10px] font-semibold text-zinc-300 outline-none">
+                                <option value="star_format">STAR format</option>
+                                <option value="stronger_verbs">Stronger action verbs</option>
+                                <option value="shorter">Shorter</option>
+                                <option value="professional">More professional</option>
+                                <option value="grammar_fix">Grammar fix</option>
+                                <option value="explain_impact">Explain impact clearly</option>
+                              </select>
+                              <button type="button" onClick={() => triggerAiInternship(i.id)} disabled={isAiBusy} className="flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-bold text-white transition hover:bg-indigo-700 disabled:opacity-50">
+                                {aiLoading[`intern_${i.id}_rewrite`] ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                                <span>Rewrite</span>
+                              </button>
+                            </div>}
                           </div>
                           <textarea
                             value={i.description}
@@ -1419,47 +1430,6 @@ function ResumeBuilder({
                         </div>
                       </div>
 
-                      {/* Internship bullet enhancers */}
-                      {isAiConfigured && (
-                        <div className="flex flex-wrap items-center gap-1 bg-indigo-500/10 bg-indigo-950/20 border border-indigo-500/20 border-indigo-900/30 p-2 rounded-xl">
-                          <span className="text-[9px] uppercase tracking-wider font-bold text-indigo-400 mr-2 flex items-center gap-1">
-                            <Sparkles className="h-2.5 w-2.5 text-indigo-400" />
-                            <span>Enhance Bullet Points:</span>
-                          </span>
-                          <button
-                            onClick={() => triggerAiInternship(i.id, 'improve')}
-                            disabled={aiLoading[`intern_${i.id}_improve`]}
-                            className="px-2 py-0.5 rounded bg-[#171A21] hover:bg-[#1f232c] border border-indigo-500/20 text-[10px] font-semibold text-indigo-400 transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                          >
-                            {aiLoading[`intern_${i.id}_improve`] && <Loader2 className="h-2 w-2 animate-spin" />}
-                            <span>STAR format</span>
-                          </button>
-                          <button
-                            onClick={() => triggerAiInternship(i.id, 'professional')}
-                            disabled={aiLoading[`intern_${i.id}_professional`]}
-                            className="px-2 py-0.5 rounded bg-[#171A21] hover:bg-zinc-800 border border-zinc-700 text-zinc-400 text-[10px] cursor-pointer flex items-center gap-1"
-                          >
-                            {aiLoading[`intern_${i.id}_professional`] && <Loader2 className="h-2 w-2 animate-spin" />}
-                            <span>Corporate Tone</span>
-                          </button>
-                          <button
-                            onClick={() => triggerAiInternship(i.id, 'metrics')}
-                            disabled={aiLoading[`intern_${i.id}_metrics`]}
-                            className="px-2 py-0.5 rounded bg-[#171A21] hover:bg-zinc-800 border border-zinc-700 text-zinc-400 text-[10px] cursor-pointer flex items-center gap-1"
-                          >
-                            {aiLoading[`intern_${i.id}_metrics`] && <Loader2 className="h-2 w-2 animate-spin" />}
-                            <span>Quantify Impact</span>
-                          </button>
-                          <button
-                            onClick={() => triggerAiInternship(i.id, 'ats')}
-                            disabled={aiLoading[`intern_${i.id}_ats`]}
-                            className="px-2 py-0.5 rounded bg-gradient-to-r from-violet-500 to-indigo-600 text-[10px] font-bold text-white transition flex items-center gap-1 cursor-pointer"
-                          >
-                            {aiLoading[`intern_${i.id}_ats`] && <Loader2 className="h-2 w-2 animate-spin" />}
-                            <span>ATS Friendly</span>
-                          </button>
-                        </div>
-                      )}
                     </div>
                   ))}
 
@@ -1479,19 +1449,19 @@ function ResumeBuilder({
         if (sectionId === 'education') {
           return (
             <div key={sectionId} className={`rounded-2xl border ${isHidden ? 'opacity-50 border-dashed border-[#2A2E37]' : 'border-[#2A2E37]'} bg-[#171A21] overflow-hidden`}>
-              <div className="flex items-center justify-between p-4 bg-[#0F1115]">
-                <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#0F1115]">
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
                   <GraduationCap className="h-4.5 w-4.5 text-indigo-500" />
                   <h3 className="text-sm font-bold text-white">{getSectionHeading('education')}</h3>
                   <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-500">{resume.education.length}</span>
                 </div>
-                <div className="flex items-center space-x-1.5">
-                  <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => moveSection(idx, 'down')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => toggleSectionVisibility(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer">
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  <button type="button" onClick={() => moveSection(idx, 'up')} aria-label={`Move ${sectionId} section up`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => moveSection(idx, 'down')} aria-label={`Move ${sectionId} section down`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => toggleSectionVisibility(sectionId)} aria-label={`${isHidden ? 'Show' : 'Hide'} ${sectionId} section`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer">
                     {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
-                  <button onClick={() => toggleSection(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => toggleSection(sectionId)} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${sectionId} section`} aria-expanded={isOpen} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
                 </div>
               </div>
 
@@ -1500,7 +1470,7 @@ function ResumeBuilder({
                   {renderHeadingControls('education')}
                   {renderSectionQualityPanel('education')}
                   {resume.education.map((edu, eduIdx) => (
-                    <div key={edu.id} className="p-4.5 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
+                    <div key={edu.id} className="p-4 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
                       <button
                         onClick={() => deleteEducation(edu.id)}
                         className="absolute top-3 right-3 p-1 hover:bg-rose-50 hover:bg-rose-950/20 rounded text-zinc-400 hover:text-rose-600 transition opacity-0 group-hover/card:opacity-100 cursor-pointer"
@@ -1603,18 +1573,18 @@ function ResumeBuilder({
         if (sectionId === 'skills') {
           return (
             <div key={sectionId} className={`rounded-2xl border ${isHidden ? 'opacity-50 border-dashed border-[#2A2E37]' : 'border-[#2A2E37]'} bg-[#171A21] overflow-hidden`}>
-              <div className="flex items-center justify-between p-4 bg-[#0F1115]">
-                <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#0F1115]">
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
                   <Compass className="h-4.5 w-4.5 text-indigo-500" />
                   <h3 className="text-sm font-bold text-white">{getSectionHeading('skills')}</h3>
                 </div>
-                <div className="flex items-center space-x-1.5">
-                  <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => moveSection(idx, 'down')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => toggleSectionVisibility(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer">
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  <button type="button" onClick={() => moveSection(idx, 'up')} aria-label={`Move ${sectionId} section up`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => moveSection(idx, 'down')} aria-label={`Move ${sectionId} section down`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => toggleSectionVisibility(sectionId)} aria-label={`${isHidden ? 'Show' : 'Hide'} ${sectionId} section`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer">
                     {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
-                  <button onClick={() => toggleSection(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => toggleSection(sectionId)} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${sectionId} section`} aria-expanded={isOpen} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
                 </div>
               </div>
 
@@ -1685,19 +1655,19 @@ function ResumeBuilder({
         if (sectionId === 'projects') {
           return (
             <div key={sectionId} className={`rounded-2xl border ${isHidden ? 'opacity-50 border-dashed border-[#2A2E37]' : 'border-[#2A2E37]'} bg-[#171A21] overflow-hidden`}>
-              <div className="flex items-center justify-between p-4 bg-[#0F1115]">
-                <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#0F1115]">
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
                   <FolderLock className="h-4.5 w-4.5 text-indigo-500" />
                   <h3 className="text-sm font-bold text-white">{getSectionHeading('projects')}</h3>
                   <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-500">{resume.projects.length}</span>
                 </div>
-                <div className="flex items-center space-x-1.5">
-                  <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => moveSection(idx, 'down')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => toggleSectionVisibility(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer">
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  <button type="button" onClick={() => moveSection(idx, 'up')} aria-label={`Move ${sectionId} section up`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => moveSection(idx, 'down')} aria-label={`Move ${sectionId} section down`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => toggleSectionVisibility(sectionId)} aria-label={`${isHidden ? 'Show' : 'Hide'} ${sectionId} section`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer">
                     {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
-                  <button onClick={() => toggleSection(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => toggleSection(sectionId)} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${sectionId} section`} aria-expanded={isOpen} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
                 </div>
               </div>
 
@@ -1706,11 +1676,13 @@ function ResumeBuilder({
                   {renderHeadingControls('projects')}
                   {renderSectionQualityPanel('projects')}
                   {resume.projects.map((proj, pIdx) => (
-                    <div key={proj.id} className="p-4.5 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
+                    <div key={proj.id} className="p-4 rounded-xl border border-[#2A2E37] bg-[#0F1115] space-y-3 relative group/card">
                       <button
+                        type="button"
                         onClick={() => deleteProject(proj.id)}
-                        className="absolute top-3 right-3 p-1 hover:bg-rose-50 hover:bg-rose-950/20 rounded text-zinc-400 hover:text-rose-600 transition opacity-0 group-hover/card:opacity-100 cursor-pointer"
+                        className="absolute right-3 top-3 rounded p-1 text-zinc-400 transition opacity-100 hover:bg-rose-50 hover:bg-rose-950/20 hover:text-rose-600 cursor-pointer sm:opacity-0 sm:group-hover/card:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
                         title="Remove Project Card"
+                        aria-label={`Remove project ${pIdx + 1}`}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -1791,26 +1763,20 @@ function ResumeBuilder({
                       </div>
 
                       {/* AI project tools */}
-                      <div className="flex gap-1.5 pt-1">
-                        <button
-                          onClick={() => triggerAiProject(proj.id, 'rewrite')}
-                          disabled={aiLoading[`proj_${proj.id}_rewrite`]}
-                          className="px-2.5 py-1 rounded bg-indigo-50 hover:bg-indigo-100 border border-indigo-500/20 text-indigo-400 bg-indigo-950 border-indigo-900 text-indigo-300 text-[10px] cursor-pointer inline-flex items-center gap-1 font-semibold disabled:opacity-50"
-                        >
-                          {aiLoading[`proj_${proj.id}_rewrite`] && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
-                          <Wand2 className="h-2.5 w-2.5" />
-                          <span>AI Description Rewrite</span>
+                      {isAiConfigured && <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                        <select value={bulletRewriteStyle} onChange={event => setBulletRewriteStyle(event.target.value as AiRewriteStyle)} disabled={isAiBusy} aria-label="Project rewrite style" className="min-h-8 max-w-full rounded-lg border border-[#2A2E37] bg-[#0F1115] px-2 text-[10px] font-semibold text-zinc-300 outline-none">
+                          <option value="star_format">STAR format</option>
+                          <option value="stronger_verbs">Stronger action verbs</option>
+                          <option value="shorter">Shorter</option>
+                          <option value="professional">More professional</option>
+                          <option value="grammar_fix">Grammar fix</option>
+                          <option value="explain_impact">Explain impact clearly</option>
+                        </select>
+                        <button onClick={() => triggerAiProject(proj.id)} disabled={isAiBusy} className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-indigo-500/20 bg-indigo-950 px-2.5 text-[10px] font-semibold text-indigo-300 transition hover:bg-indigo-900 disabled:opacity-50">
+                          {aiLoading[`proj_${proj.id}_rewrite`] ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Wand2 className="h-2.5 w-2.5" />}
+                          <span>Rewrite project</span>
                         </button>
-                        <button
-                          onClick={() => triggerAiProject(proj.id, 'ats')}
-                          disabled={aiLoading[`proj_${proj.id}_ats`]}
-                          className="px-2.5 py-1 rounded bg-violet-600 text-white hover:bg-violet-700 text-[10px] font-bold cursor-pointer inline-flex items-center gap-1 disabled:opacity-50"
-                        >
-                          {aiLoading[`proj_${proj.id}_ats`] && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
-                          <Sparkles className="h-2.5 w-2.5 fill-current text-yellow-300" />
-                          <span>ATS Align</span>
-                        </button>
-                      </div>
+                      </div>}
                     </div>
                   ))}
 
@@ -1830,19 +1796,19 @@ function ResumeBuilder({
         if (sectionId === 'certifications') {
           return (
             <div key={sectionId} className={`rounded-2xl border ${isHidden ? 'opacity-50 border-dashed border-[#2A2E37]' : 'border-[#2A2E37]'} bg-[#171A21] overflow-hidden`}>
-              <div className="flex items-center justify-between p-4 bg-[#0F1115]">
-                <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#0F1115]">
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
                   <Award className="h-4.5 w-4.5 text-indigo-500" />
                   <h3 className="text-sm font-bold text-white">{getSectionHeading('certifications')}</h3>
                   <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-zinc-500">{resume.certifications.length}</span>
                 </div>
-                <div className="flex items-center space-x-1.5">
-                  <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => moveSection(idx, 'down')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => toggleSectionVisibility(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer">
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  <button type="button" onClick={() => moveSection(idx, 'up')} aria-label={`Move ${sectionId} section up`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => moveSection(idx, 'down')} aria-label={`Move ${sectionId} section down`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => toggleSectionVisibility(sectionId)} aria-label={`${isHidden ? 'Show' : 'Hide'} ${sectionId} section`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer">
                     {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
-                  <button onClick={() => toggleSection(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => toggleSection(sectionId)} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${sectionId} section`} aria-expanded={isOpen} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
                 </div>
               </div>
 
@@ -1922,18 +1888,18 @@ function ResumeBuilder({
         if (sectionId === 'achievements') {
           return (
             <div key={sectionId} className={`rounded-2xl border ${isHidden ? 'opacity-50 border-dashed border-[#2A2E37]' : 'border-[#2A2E37]'} bg-[#171A21] overflow-hidden`}>
-              <div className="flex items-center justify-between p-4 bg-[#0F1115]">
-                <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#0F1115]">
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
                   <Star className="h-4.5 w-4.5 text-indigo-500" />
                   <h3 className="text-sm font-bold text-white">{getSectionHeading('achievements')}</h3>
                 </div>
-                <div className="flex items-center space-x-1.5">
-                  <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => moveSection(idx, 'down')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => toggleSectionVisibility(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer">
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  <button type="button" onClick={() => moveSection(idx, 'up')} aria-label={`Move ${sectionId} section up`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => moveSection(idx, 'down')} aria-label={`Move ${sectionId} section down`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => toggleSectionVisibility(sectionId)} aria-label={`${isHidden ? 'Show' : 'Hide'} ${sectionId} section`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer">
                     {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
-                  <button onClick={() => toggleSection(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => toggleSection(sectionId)} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${sectionId} section`} aria-expanded={isOpen} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
                 </div>
               </div>
 
@@ -1959,18 +1925,18 @@ function ResumeBuilder({
         if (sectionId === 'volunteering') {
           return (
             <div key={sectionId} className={`rounded-2xl border ${isHidden ? 'opacity-50 border-dashed border-[#2A2E37]' : 'border-[#2A2E37]'} bg-[#171A21] overflow-hidden`}>
-              <div className="flex items-center justify-between p-4 bg-[#0F1115]">
-                <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#0F1115]">
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
                   <Globe className="h-4.5 w-4.5 text-indigo-500" />
                   <h3 className="text-sm font-bold text-white">{getSectionHeading('volunteering')}</h3>
                 </div>
-                <div className="flex items-center space-x-1.5">
-                  <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => moveSection(idx, 'down')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => toggleSectionVisibility(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer">
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  <button type="button" onClick={() => moveSection(idx, 'up')} aria-label={`Move ${sectionId} section up`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => moveSection(idx, 'down')} aria-label={`Move ${sectionId} section down`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => toggleSectionVisibility(sectionId)} aria-label={`${isHidden ? 'Show' : 'Hide'} ${sectionId} section`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer">
                     {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
-                  <button onClick={() => toggleSection(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => toggleSection(sectionId)} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${sectionId} section`} aria-expanded={isOpen} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
                 </div>
               </div>
 
@@ -2060,18 +2026,18 @@ function ResumeBuilder({
         if (sectionId === 'languages') {
           return (
             <div key={sectionId} className={`rounded-2xl border ${isHidden ? 'opacity-50 border-dashed border-[#2A2E37]' : 'border-[#2A2E37]'} bg-[#171A21] overflow-hidden`}>
-              <div className="flex items-center justify-between p-4 bg-[#0F1115]">
-                <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#0F1115]">
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
                   <Globe className="h-4.5 w-4.5 text-indigo-500" />
                   <h3 className="text-sm font-bold text-white">{getSectionHeading('languages')}</h3>
                 </div>
-                <div className="flex items-center space-x-1.5">
-                  <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => moveSection(idx, 'down')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => toggleSectionVisibility(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer">
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  <button type="button" onClick={() => moveSection(idx, 'up')} aria-label={`Move ${sectionId} section up`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => moveSection(idx, 'down')} aria-label={`Move ${sectionId} section down`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => toggleSectionVisibility(sectionId)} aria-label={`${isHidden ? 'Show' : 'Hide'} ${sectionId} section`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer">
                     {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
-                  <button onClick={() => toggleSection(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => toggleSection(sectionId)} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${sectionId} section`} aria-expanded={isOpen} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
                 </div>
               </div>
 
@@ -2100,25 +2066,26 @@ function ResumeBuilder({
 
           return (
             <div key={sectionId} className={`rounded-2xl border ${isHidden ? 'opacity-50 border-dashed border-[#2A2E37]' : 'border-[#2A2E37]'} bg-[#171A21] overflow-hidden`}>
-              <div className="flex items-center justify-between p-4 bg-[#0F1115]">
-                <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#0F1115]">
+                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
                   <PlusCircle className="h-4.5 w-4.5 text-indigo-500" />
+                  <Pencil className="h-3.5 w-3.5 text-zinc-500" aria-hidden="true" />
                   <input
                     type="text"
                     value={cSec.title}
                     onChange={e => updateCustomSectionTitle(cSec.id, e.target.value)}
+                    aria-label="Edit section title"
                     className="text-sm font-bold text-white bg-transparent border-b border-dashed border-gray-300 focus:border-indigo-500 outline-none w-48 font-sans"
                   />
-                  <span className="text-[9px] bg-indigo-50 text-indigo-500 px-1.5 py-0.5 rounded font-semibold">Custom Section</span>
                 </div>
-                <div className="flex items-center space-x-1.5">
-                  <button onClick={() => moveSection(idx, 'up')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => moveSection(idx, 'down')} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => deleteCustomSection(cSec.id)} className="p-1 text-zinc-400 hover:text-rose-500 cursor-pointer" title="Delete entire custom section"><Trash2 className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => toggleSectionVisibility(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer">
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  <button type="button" onClick={() => moveSection(idx, 'up')} aria-label={`Move ${sectionId} section up`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowUp className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => moveSection(idx, 'down')} aria-label={`Move ${sectionId} section down`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ArrowDown className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => deleteCustomSection(cSec.id)} aria-label={`Delete custom section ${cSec.title}`} className="rounded p-1 text-zinc-400 hover:text-rose-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 cursor-pointer" title="Delete entire custom section"><Trash2 className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => toggleSectionVisibility(sectionId)} aria-label={`${isHidden ? 'Show' : 'Hide'} ${sectionId} section`} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer">
                     {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
-                  <button onClick={() => toggleSection(sectionId)} className="p-1 text-zinc-400 hover:text-indigo-500 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => toggleSection(sectionId)} aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${sectionId} section`} aria-expanded={isOpen} className="rounded p-1 text-zinc-400 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 cursor-pointer"><ChevronDown className="h-4 w-4" /></button>
                 </div>
               </div>
 
@@ -2133,7 +2100,7 @@ function ResumeBuilder({
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 f-sans">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 font-sans">
                         <div>
                           <label className="block text-[10px] font-bold text-zinc-400 mb-1">Item Title</label>
                           <input
@@ -2145,7 +2112,7 @@ function ResumeBuilder({
                           />
                         </div>
                         <div>
-                          <label className="block text-[10px] font-bold text-zinc-400 mb-1">Subtitle / Organization</label>
+                          <label className="mb-1 flex items-center gap-1 text-[10px] font-bold text-zinc-400"><Pencil className="h-2.5 w-2.5" /> Subtitle / Organization</label>
                           <input
                             type="text"
                             value={item.subtitle || ''}
@@ -2193,81 +2160,12 @@ function ResumeBuilder({
         <Plus className="h-4.5 w-4.5" />
         <span>Establish custom extra section</span>
       </button>
-
-      {/* ATS SUMMARY OPTIMIZATION DIALOG */}
-      {atsSummaryDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs">
-          <div className="bg-[#171A21] border border-[#2A2E37] w-full max-w-2xl rounded-2xl overflow-hidden shadow-xl">
-            <div className="p-4 bg-[#0F1115] border-b border-[#2A2E37] flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-indigo-500/10">
-                <Sparkles className="h-5 w-5 text-indigo-400 fill-current" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-white">ATS Summary Optimization Review</h3>
-                <p className="text-[10px] text-zinc-400">Strictly focused on readability and compliance without inventing details</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-5 border-b border-[#2A2E37] bg-zinc-950/20">
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Original Version</span>
-                  <span className="text-[9px] font-semibold text-zinc-500 bg-zinc-800 px-2 py-0.5 rounded-full">
-                    {atsSummaryDetails.original ? atsSummaryDetails.original.split(/\s+/).filter(Boolean).length : 0} words
-                  </span>
-                </div>
-                <div className="p-3 bg-[#0F1115] border border-[#2A2E37] rounded-xl text-xs text-zinc-300 h-40 overflow-y-auto whitespace-pre-wrap leading-relaxed">
-                  {atsSummaryDetails.original}
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">ATS Optimized Version</span>
-                  <span className="text-[9px] font-semibold text-indigo-400 bg-indigo-950 px-2 py-0.5 rounded-full">
-                    {atsSummaryDetails.optimized ? atsSummaryDetails.optimized.split(/\s+/).filter(Boolean).length : 0} words (Max 100)
-                  </span>
-                </div>
-                <div className="p-3 bg-[#0F1115] border border-indigo-500/20 rounded-xl text-xs text-white h-40 overflow-y-auto whitespace-pre-wrap leading-relaxed">
-                  {atsSummaryDetails.optimized}
-                </div>
-              </div>
-            </div>
-
-            <div className="p-5 bg-zinc-900/10 border-b border-[#2A2E37] space-y-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block">What Changed</span>
-              <ul className="space-y-1.5">
-                {atsSummaryDetails.whatChanged.map((change, cIdx) => (
-                  <li key={cIdx} className="text-xs text-zinc-300 flex items-start gap-2">
-                    <span className="text-indigo-400 mt-1 font-bold">•</span>
-                    <span>{change}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="p-4 bg-[#0F1115] flex justify-end gap-3">
-              <button
-                onClick={() => setAtsSummaryDetails(null)}
-                className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-zinc-300 transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  updateSummary(atsSummaryDetails.optimized);
-                  setAtsSummaryDetails(null);
-                  showToasts('ATS Optimized Summary applied!', 'success');
-                }}
-                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-xs font-bold text-white transition"
-              >
-                Apply ATS Summary
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
+      <AiSuggestionReview
+        suggestion={aiSuggestion}
+        onApply={handleApplyAiSuggestion}
+        onClose={closeAiSuggestion}
+        showToasts={showToasts}
+      />
       <ConfirmationDialog
         isOpen={confirmConfig.isOpen}
         onClose={() => setConfirmConfig(prev => ({ ...prev, isOpen: false }))}
@@ -2310,5 +2208,7 @@ const hasSameEditorData = (previous: ResumeData, next: ResumeData) =>
 export default React.memo(ResumeBuilder, (previous, next) =>
   hasSameEditorData(previous.resume, next.resume) &&
   previous.settings === next.settings &&
-  previous.saving === next.saving
+  previous.saving === next.saving &&
+  previous.aiEnabled === next.aiEnabled &&
+  previous.onOpenAiAssist === next.onOpenAiAssist
 );

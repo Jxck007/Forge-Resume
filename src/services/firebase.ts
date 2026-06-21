@@ -32,6 +32,62 @@ import { DEFAULT_SECTION_ORDER, normalizeSectionOrder } from '../utils/sectionOr
 import { normalizeEducationScore } from '../utils/educationScore';
 import { analyzeResumeLanguageQuality } from '../utils/languageQuality';
 import { createDefaultSectionConfig, normalizeSectionConfig } from '../utils/resolveSectionHeading';
+import {
+  readStorageJson,
+  removeStorageValue,
+  storageKeys,
+  writeStorageJson,
+} from '../utils/storageKeys';
+
+const LEGACY_PROVIDER_KEY_FIELDS = [
+  'groqApiKey',
+  'geminiApiKey',
+  'openaiApiKey',
+  'openRouterApiKey',
+  'apiKey',
+  'providerApiKey',
+  'aiApiKey',
+  'googleApiKey',
+  'cerebrasApiKey',
+  'selectedProviderKey',
+] as const;
+
+type LegacyProviderKeyField = (typeof LEGACY_PROVIDER_KEY_FIELDS)[number];
+
+const USER_SETTINGS_WRITE_FIELDS = [
+  'uid',
+  'email',
+  'hasCompletedProfile',
+  'defaultTemplate',
+  'defaultExportFormat',
+  'defaultLinkDisplayMode',
+  'defaultSectionOrderMode',
+  'defaultUseProfilePhoto',
+  'createdAt',
+  'updatedAt',
+] as const satisfies readonly (keyof UserSettings)[];
+
+const omitLegacyProviderKeys = (value: Record<string, unknown>) => {
+  const next = { ...value };
+  LEGACY_PROVIDER_KEY_FIELDS.forEach(field => {
+    delete next[field];
+  });
+  return next;
+};
+
+export function sanitizeUserSettingsFromFirestore(value: unknown): UserSettings | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return omitLegacyProviderKeys(value as Record<string, unknown>) as unknown as UserSettings;
+}
+
+export function sanitizeUserSettingsForWrite(fields: Partial<UserSettings>): Partial<UserSettings> {
+  const next = omitLegacyProviderKeys(fields as Record<string, unknown>);
+  return Object.fromEntries(
+    USER_SETTINGS_WRITE_FIELDS
+      .filter(field => next[field] !== undefined)
+      .map(field => [field, next[field]])
+  ) as Partial<UserSettings>;
+}
 
 // Firestore error handling with dedicated JSON payload as mandated by SKILL
 export enum OperationType {
@@ -78,8 +134,11 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path,
   };
-  console.error('Firestore Error Details: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  if (import.meta.env.DEV) console.error('Firestore operation failed:', errInfo);
+  const isWrite = [OperationType.CREATE, OperationType.UPDATE, OperationType.DELETE, OperationType.WRITE].includes(operationType);
+  throw new Error(isWrite
+    ? 'We couldn’t save right now. Please check your connection and try again.'
+    : 'We couldn’t load this data right now. Please check your connection and try again.');
 }
 
 // Authentication Helpers
@@ -367,6 +426,28 @@ export async function logoutUser() {
   }
 }
 
+export interface FeedbackSubmissionPayload {
+  category: string;
+  message: string;
+  email?: string;
+  route: string;
+  timestamp: string;
+  appVersion?: string;
+}
+
+export async function saveFeedbackSubmission(userId: string, payload: FeedbackSubmissionPayload) {
+  const feedbackRef = doc(collection(getDb(), 'feedback'));
+  try {
+    await setDoc(feedbackRef, {
+      ...payload,
+      userId,
+      createdAt: payload.timestamp,
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, feedbackRef.path);
+  }
+}
+
 // Profile Sync Helper
 export async function syncUserProfile(user: FirebaseUser) {
   const userRef = doc(getDb(), 'users', user.uid);
@@ -376,7 +457,6 @@ export async function syncUserProfile(user: FirebaseUser) {
       const uSettings: UserSettings = {
         uid: user.uid,
         email: user.email || '',
-        aiProvider: 'Groq',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -393,7 +473,7 @@ export async function getUserSettings(uid: string): Promise<UserSettings | null>
   try {
     const s = await getDoc(userRef);
     if (s.exists()) {
-      return s.data() as UserSettings;
+      return sanitizeUserSettingsFromFirestore(s.data());
     }
     return null;
   } catch (err) {
@@ -404,15 +484,18 @@ export async function getUserSettings(uid: string): Promise<UserSettings | null>
 export async function saveUserSettings(uid: string, fields: Partial<UserSettings>): Promise<void> {
   const userRef = doc(getDb(), 'users', uid);
   try {
-    await updateDoc(userRef, {
-      ...fields,
+    const sanitizedFields = sanitizeUserSettingsForWrite(fields);
+    await setDoc(userRef, {
+      uid,
+      ...sanitizedFields,
       updatedAt: new Date().toISOString(),
-    });
+    }, { merge: true });
   } catch (err) {
-    handleFirestoreError(err, OperationType.UPDATE, `users/${uid}`);
+    handleFirestoreError(err, OperationType.WRITE, `users/${uid}`);
   }
 }
 
+/** Deprecated: provider keys are intentionally ignored. BYOK will be session-only. */
 export async function removeUserProviderKey(
   uid: string,
   keyField: 'groqApiKey' | 'geminiApiKey' | 'openaiApiKey' | 'openRouterApiKey'
@@ -539,12 +622,11 @@ export async function createNewResume(userId: string, title: string, templateId:
 
   // Cache locally first for instant offline readiness
   try {
-    localStorage.setItem(`forge_resume_${id}`, JSON.stringify(defaultResume));
-    const localListStr = localStorage.getItem(`forge_local_resumes_list`);
-    const localList = localListStr ? JSON.parse(localListStr) : [];
+    writeStorageJson(storageKeys.user.resume(userId, id), defaultResume);
+    const localList = readStorageJson<string[]>(storageKeys.user.resumeIndex(userId)) || [];
     if (!localList.includes(id)) {
       localList.push(id);
-      localStorage.setItem(`forge_local_resumes_list`, JSON.stringify(localList));
+      writeStorageJson(storageKeys.user.resumeIndex(userId), localList);
     }
   } catch (err) {
     console.warn('Failed writing resume cache locally:', err);
@@ -560,7 +642,7 @@ export async function createNewResume(userId: string, title: string, templateId:
   }
 }
 
-export async function getResume(resumeId: string): Promise<ResumeData | null> {
+export async function getResume(resumeId: string, userId?: string): Promise<ResumeData | null> {
   try {
     const rRef = doc(getDb(), 'resumes', resumeId);
     const s = await getDoc(rRef);
@@ -568,30 +650,32 @@ export async function getResume(resumeId: string): Promise<ResumeData | null> {
       const data = s.data() as ResumeData;
       // sync to local cache
       try {
-        localStorage.setItem(`forge_resume_${resumeId}`, JSON.stringify(data));
+        const ownerId = userId || data.ownerId || data.userId;
+        if (ownerId) {
+          writeStorageJson(storageKeys.user.resume(ownerId, resumeId), data);
+        }
       } catch {}
       return data;
     }
     return null;
   } catch (err) {
     // Try local backup
-    try {
-      const cached = localStorage.getItem(`forge_resume_${resumeId}`);
-      if (cached) return JSON.parse(cached);
-    } catch {}
+    if (userId) {
+      const cached = readStorageJson<ResumeData>(storageKeys.user.resume(userId, resumeId));
+      if (cached?.ownerId === userId || cached?.userId === userId) return cached;
+    }
     handleFirestoreError(err, OperationType.GET, `resumes/${resumeId}`);
   }
 }
 
-export async function updateResumeInDb(resumeId: string, updates: Partial<ResumeData>): Promise<void> {
+export async function updateResumeInDb(userId: string, resumeId: string, updates: Partial<ResumeData>): Promise<void> {
   const { ownerId: _ownerId, userId: _userId, id: _id, ...safeUpdates } = updates;
   // Update local storage first
   try {
-    const cached = localStorage.getItem(`forge_resume_${resumeId}`);
+    const cached = readStorageJson<ResumeData>(storageKeys.user.resume(userId, resumeId));
     if (cached) {
-      const current = JSON.parse(cached);
-      const merged = { ...current, ...safeUpdates, updatedAt: new Date().toISOString() };
-      localStorage.setItem(`forge_resume_${resumeId}`, JSON.stringify(merged));
+      const merged = { ...cached, ...safeUpdates, updatedAt: new Date().toISOString() };
+      writeStorageJson(storageKeys.user.resume(userId, resumeId), merged);
     }
   } catch (err) {
     console.warn('Failed updating local storage cache:', err);
@@ -608,14 +692,12 @@ export async function updateResumeInDb(resumeId: string, updates: Partial<Resume
   }
 }
 
-export async function deleteResumeFromDb(resumeId: string): Promise<void> {
+export async function deleteResumeFromDb(userId: string, resumeId: string): Promise<void> {
   try {
-    localStorage.removeItem(`forge_resume_${resumeId}`);
-    const localListStr = localStorage.getItem(`forge_local_resumes_list`);
-    if (localListStr) {
-      const localList = JSON.parse(localListStr).filter((id: string) => id !== resumeId);
-      localStorage.setItem(`forge_local_resumes_list`, JSON.stringify(localList));
-    }
+    removeStorageValue(storageKeys.user.resume(userId, resumeId));
+    const localList = (readStorageJson<string[]>(storageKeys.user.resumeIndex(userId)) || [])
+      .filter(id => id !== resumeId);
+    writeStorageJson(storageKeys.user.resumeIndex(userId), localList);
   } catch (err) {
     console.warn('Failed clearing deleted resume from local cache:', err);
   }
@@ -628,26 +710,29 @@ export async function deleteResumeFromDb(resumeId: string): Promise<void> {
   }
 }
 
-export function syncLocalResumeCache(resumes: ResumeData[]): void {
+const readCachedUserResumes = (userId: string): ResumeData[] => {
+  const localIds = readStorageJson<string[]>(storageKeys.user.resumeIndex(userId)) || [];
+  return localIds
+    .map(id => readStorageJson<ResumeData>(storageKeys.user.resume(userId, id)))
+    .filter((resume): resume is ResumeData => Boolean(resume))
+    .filter(resume => resume.ownerId === userId || resume.userId === userId);
+};
+
+export function syncLocalResumeCache(userId: string, resumes: ResumeData[]): void {
   try {
+    const previousIds = readStorageJson<string[]>(storageKeys.user.resumeIndex(userId)) || [];
     const ids = new Set(resumes.map(r => r.id));
-    localStorage.setItem('forge_local_resumes_list', JSON.stringify([...ids]));
 
     resumes.forEach(r => {
-      localStorage.setItem(`forge_resume_${r.id}`, JSON.stringify(r));
+      if (r.ownerId !== userId && r.userId !== userId) return;
+      writeStorageJson(storageKeys.user.resume(userId, r.id), r);
     });
 
-    const keysToRemove: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key?.startsWith('forge_resume_')) {
-        const id = key.replace('forge_resume_', '');
-        if (!ids.has(id)) {
-          keysToRemove.push(key);
-        }
-      }
-    }
-    keysToRemove.forEach(key => localStorage.removeItem(key));
+    previousIds.forEach(id => {
+      if (!ids.has(id)) removeStorageValue(storageKeys.user.resume(userId, id));
+    });
+
+    writeStorageJson(storageKeys.user.resumeIndex(userId), [...ids]);
   } catch (err) {
     console.warn('Failed syncing local resume cache:', err);
   }
@@ -665,18 +750,7 @@ export async function fetchUserResumes(userId: string): Promise<ResumeData[]> {
     return results;
   } catch (err) {
     // Return local cached lists instead of failing
-    const results: ResumeData[] = [];
-    try {
-      const localListStr = localStorage.getItem(`forge_local_resumes_list`);
-      const localIds = localListStr ? JSON.parse(localListStr) : [];
-      localIds.forEach((id: string) => {
-        const cached = localStorage.getItem(`forge_resume_${id}`);
-        if (cached) {
-          results.push(JSON.parse(cached));
-        }
-      });
-    } catch {}
-    return results;
+    return readCachedUserResumes(userId);
   }
 }
 
@@ -692,37 +766,25 @@ export function subscribeToUserResumes(userId: string, callback: (resumes: Resum
         snapshot.forEach(d => {
           results.push(d.data() as ResumeData);
         });
-        callback(results);
+        const cachedById = new Map(readCachedUserResumes(userId).map(resume => [resume.id, resume]));
+        results.forEach(resume => {
+          if (resume.ownerId === userId || resume.userId === userId) {
+            cachedById.set(resume.id, resume);
+          }
+        });
+        callback([...cachedById.values()]);
       },
       error => {
         console.warn('onSnapshot error (likely offline). Falling back to local index:', error);
         try {
-          const results: ResumeData[] = [];
-          const localListStr = localStorage.getItem(`forge_local_resumes_list`);
-          const localIds = localListStr ? JSON.parse(localListStr) : [];
-          localIds.forEach((id: string) => {
-            const cached = localStorage.getItem(`forge_resume_${id}`);
-            if (cached) {
-              results.push(JSON.parse(cached));
-            }
-          });
-          callback(results);
+          callback(readCachedUserResumes(userId));
         } catch {
           callback([]);
         }
       }
     );
   } catch {
-    const results: ResumeData[] = [];
-    const localListStr = localStorage.getItem(`forge_local_resumes_list`);
-    const localIds = localListStr ? JSON.parse(localListStr) : [];
-    localIds.forEach((id: string) => {
-      const cached = localStorage.getItem(`forge_resume_${id}`);
-      if (cached) {
-        results.push(JSON.parse(cached));
-      }
-    });
-    callback(results);
+    callback(readCachedUserResumes(userId));
     return () => {};
   }
 }

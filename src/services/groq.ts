@@ -157,8 +157,8 @@ Required JSON format (no markdown):
         explanation: limitRewrite(rewrite.explanation),
       })).filter(rewrite => rewrite.original && rewrite.optimized),
     };
-  } catch (err) {
-    console.error('Failed parsing Deep ATS JSON response:', err);
+  } catch {
+    if (import.meta.env.DEV) console.warn('Legacy Deep ATS response could not be parsed.');
     return {
       strengths: ['Profile identified'],
       weaknesses: ['Enhancement recommended'],
@@ -236,8 +236,8 @@ Education score rules:
       throw new Error('The AI returned an invalid root value.');
     }
     return parsed as Partial<ResumeData>;
-  } catch (err) {
-    console.error('Failed to parse resume import JSON:', err);
+  } catch {
+    if (import.meta.env.DEV) console.warn('Legacy resume import response could not be parsed.');
     throw new Error('AI returned invalid resume data. No resume was created. Please try the import again.');
   }
 }
@@ -314,9 +314,9 @@ Education score rules:
   try {
     const cleaned = cleanJsonOutput(rawJson);
     return JSON.parse(cleaned) as Partial<ProfileData>;
-  } catch (err) {
-    console.error('Failed to parse profile import JSON:', err);
-    throw new Error('AI could not parse the resume text into a structured format. Please check your AI provider settings.');
+  } catch {
+    if (import.meta.env.DEV) console.warn('Legacy profile import response could not be parsed.');
+    throw new Error('Assisted import is temporarily unavailable. Please try again later.');
   }
 }
 

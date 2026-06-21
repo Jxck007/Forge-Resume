@@ -1,5 +1,9 @@
 import { UserSettings } from '../types';
 
+// Legacy browser-side provider path.
+// Deprecated: active product flows must not rely on client-persisted provider keys.
+// Future BYOK must be session-memory only, and Forge-owned keys must be server-side only.
+
 interface AIRateLimit {
   lastRequestTime: number;
   requestQueue: Array<() => Promise<any>>;
@@ -31,8 +35,8 @@ async function processQueue() {
     if (task) {
       try {
         await task();
-      } catch (err) {
-        console.error('AI Queue Task Error:', err);
+      } catch {
+        if (import.meta.env.DEV) console.warn('Legacy AI queue task failed.');
       }
       rateLimit.lastRequestTime = Date.now();
     }
@@ -55,7 +59,7 @@ export async function callAIUnified(
       } catch (err) {
         // Simple retry mechanism
         try {
-          console.warn('AI Request failed, retrying once...', err);
+          if (import.meta.env.DEV) console.warn('Legacy AI request failed. Retrying once.');
           await new Promise(r => setTimeout(r, 2000));
           const result = await executeAICall(settings, systemPrompt, userPrompt, jsonMode);
           resolve(result);
@@ -71,104 +75,12 @@ export async function callAIUnified(
 }
 
 async function executeAICall(
-  settings: UserSettings,
-  systemPrompt: string,
-  userPrompt: string,
-  jsonMode = false
+  _settings: UserSettings,
+  _systemPrompt: string,
+  _userPrompt: string,
+  _jsonMode = false
 ): Promise<string> {
-  const provider = settings.aiProvider || 'Groq';
-  const temperature = settings.temperature ?? 0.4;
-  const model = settings.modelId || getDefaultModel(provider);
-  
-  let apiKey = '';
-  let endpoint = '';
-  let headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  let body: any = {};
-
-  switch (provider) {
-    case 'Groq':
-      apiKey = settings.groqApiKey || '';
-      endpoint = 'https://api.groq.com/openai/v1/chat/completions';
-      headers['Authorization'] = `Bearer ${apiKey}`;
-      body = {
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature,
-        response_format: jsonMode ? { type: 'json_object' } : undefined
-      };
-      break;
-    case 'OpenAI':
-      apiKey = settings.openaiApiKey || '';
-      endpoint = 'https://api.openai.com/v1/chat/completions';
-      headers['Authorization'] = `Bearer ${apiKey}`;
-      body = {
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature,
-        response_format: jsonMode ? { type: 'json_object' } : undefined
-      };
-      break;
-    case 'OpenRouter':
-      apiKey = settings.openRouterApiKey || '';
-      endpoint = 'https://openrouter.ai/api/v1/chat/completions';
-      headers['Authorization'] = `Bearer ${apiKey}`;
-      headers['HTTP-Referer'] = window.location.origin;
-      headers['X-Title'] = 'Forge Resume';
-      body = {
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature
-      };
-      break;
-    case 'Gemini':
-      apiKey = settings.geminiApiKey || '';
-      // Using the Google GenAI interface style but via fetch for unity
-      endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-      body = {
-        contents: [
-          { role: 'user', parts: [{ text: `${systemPrompt}\n\nTask:\n${userPrompt}` }] }
-        ],
-        generationConfig: {
-          temperature,
-          responseMimeType: jsonMode ? 'application/json' : 'text/plain'
-        }
-      };
-      break;
-    default:
-      throw new Error(`Unsupported AI Provider: ${provider}`);
-  }
-
-  if (!apiKey) {
-    throw new Error(`API Key for ${provider} is not configured in Settings.`);
-  }
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body)
-  });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`${provider} API Error (${response.status}): ${errText}`);
-  }
-
-  const data = await response.json();
-  
-  if (provider === 'Gemini') {
-    return data.candidates[0]?.content?.parts[0]?.text || '';
-  }
-  
-  return data.choices[0]?.message?.content || '';
+  throw new Error('Legacy AI provider access is unavailable. Use session-only AI Assist.');
 }
 
 export function getDefaultModel(provider: string): string {

@@ -14,12 +14,17 @@ import {
   ProjectEntry,
   ResumeData,
   SkillCategory,
-  StandardSectionKey,
   TemplateId,
 } from '../types';
 import { normalizeEducationScore } from './educationScore';
 import { ResumeTemplatePlan, resumeFamilyRules, resumeTemplatePlans } from '../design-system/resumeSystem';
-import { DEFAULT_SECTION_ORDER, resolveResumeSectionOrder, TEMPLATE_SECTION_PRIORITIES } from './sectionOrder';
+import {
+  DEFAULT_SECTION_ORDER,
+  SECTION_HEADING_ALIASES,
+  TEMPLATE_SECTION_PRIORITIES,
+  canonicalizeSectionId,
+} from './sectionEngine';
+import { resolveResumeSectionOrder } from './sectionOrder';
 
 const ACTION_VERBS = [
   'achieved', 'architected', 'automated', 'built', 'created', 'delivered', 'designed',
@@ -187,60 +192,16 @@ const ROLE_SECTION_WEIGHTS: Partial<Record<SectionKey | 'header' | 'source', num
   source: 0.3,
 };
 
-const SECTION_PATTERNS: Array<[SectionKey, RegExp]> = [
-  ['summary', /^(?:professional\s+)?(?:summary|profile|objective|about(?:\s+me)?)$/i],
-  ['skills', /^(?:technical\s+)?skills|core competencies|technologies$/i],
-  ['experience', /^(?:professional\s+|work\s+)?experience|employment(?:\s+history)?$/i],
-  ['internships', /^internships?|training$/i],
-  ['projects', /^(?:technical\s+|academic\s+)?projects?|portfolio$/i],
-  ['education', /^education|academic(?:\s+background)?|qualifications?$/i],
-  ['certifications', /^certifications?|licenses?|courses$/i],
-  ['achievements', /^achievements?|awards?|accomplishments?$/i],
-];
-
-const SECTION_ALIASES: Record<SectionKey, RegExp[]> = {
-  summary: [
-    /^(?:professional\s+)?summary$/i,
-    /^career\s+objective$/i,
-    /^objective$/i,
-    /^profile$/i,
-    /^about(?:\s+me)?$/i,
-  ],
-  skills: [
-    /^(?:technical|core)\s+skills$/i,
-    /^skills$/i,
-    /^core competencies$/i,
-    /^technologies$/i,
-  ],
-  experience: [
-    /^(?:professional\s+|work\s+)?experience$/i,
-    /^employment(?:\s+history)?$/i,
-    /^work history$/i,
-  ],
-  internships: [
-    /^internships?$/i,
-    /^training$/i,
-  ],
-  projects: [
-    /^(?:technical\s+|academic\s+)?projects?$/i,
-    /^portfolio$/i,
-  ],
-  education: [
-    /^education$/i,
-    /^academic(?:\s+background|\s+details)?$/i,
-    /^qualifications?$/i,
-  ],
-  certifications: [
-    /^certifications?$/i,
-    /^licenses?$/i,
-    /^courses$/i,
-  ],
-  achievements: [
-    /^achievements?$/i,
-    /^awards?$/i,
-    /^accomplishments?$/i,
-  ],
-};
+const SECTION_KEY_SET = new Set<SectionKey>([
+  'summary',
+  'skills',
+  'experience',
+  'internships',
+  'projects',
+  'education',
+  'certifications',
+  'achievements',
+]);
 
 export type AtsSourceKind = 'structured' | 'text-pdf' | 'docx' | 'image-ocr';
 
@@ -501,10 +462,9 @@ const flattenSkills = (skills: SkillCategory) =>
   unique(Object.values(skills).flat().map(skill => canonicalizeTerm(skill)));
 
 const detectHeading = (line: string): SectionKey | null => {
-  const normalized = line.replace(/[:|]+$/, '').trim();
-  if (!normalized || normalized.length > 45) return null;
-  return (Object.entries(SECTION_ALIASES) as Array<[SectionKey, RegExp[]]>)
-    .find(([, patterns]) => patterns.some(pattern => pattern.test(normalized)))?.[0] || null;
+  const normalized = canonicalizeSectionId(line);
+  if (!normalized || normalized.length > 45 || !SECTION_KEY_SET.has(normalized as SectionKey)) return null;
+  return normalized as SectionKey;
 };
 
 const splitBlocks = (lines: string[]) => {
@@ -884,7 +844,7 @@ const analyzeFormatting = (
   let score = 100;
   const feedback: string[] = [];
 
-  const headingMatches = (Object.values(SECTION_ALIASES) as RegExp[][]).filter(patterns =>
+  const headingMatches = (Object.values(SECTION_HEADING_ALIASES) as RegExp[][]).filter(patterns =>
     rawText.split(/\r?\n/).some(line => patterns.some(pattern => pattern.test(line.replace(/[:|]+$/, '').trim())))
   ).length;
   if (rawText && headingMatches < 3) {

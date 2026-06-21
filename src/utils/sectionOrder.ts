@@ -1,34 +1,15 @@
-import { ResumeData, TemplateId } from '../types';
+import { ResumeData } from '../types';
 import { formatEducationScore } from './educationScore';
-import { resolveSectionHeading } from './resolveSectionHeading';
+import {
+  DEFAULT_SECTION_ORDER,
+  TEMPLATE_SECTION_PRIORITIES,
+  canonicalizeSectionId,
+  getRecommendedSectionOrder,
+  getSectionOrder,
+  resolveSectionHeading,
+} from './sectionEngine';
 
-export const DEFAULT_SECTION_ORDER = [
-  'summary',
-  'experience',
-  'internships',
-  'education',
-  'skills',
-  'projects',
-  'certifications',
-  'achievements',
-  'volunteering',
-  'languages',
-] as const;
-
-export const TEMPLATE_SECTION_PRIORITIES: Record<TemplateId, readonly string[]> = {
-  modern: ['summary', 'experience', 'skills', 'projects'],
-  minimal: ['summary', 'experience', 'education', 'skills'],
-  corporate: ['summary', 'experience', 'education', 'skills', 'certifications'],
-  executive: ['summary', 'experience', 'achievements', 'education', 'certifications'],
-  creative: ['projects', 'summary', 'experience', 'skills', 'achievements'],
-  atsFriendly: ['summary', 'skills', 'experience', 'projects', 'education'],
-  softwareEngineer: ['skills', 'projects', 'experience', 'education', 'certifications'],
-  student: ['education', 'projects', 'skills', 'internships', 'summary', 'experience'],
-  startup: ['projects', 'experience', 'skills', 'education', 'achievements', 'summary'],
-  designer: ['projects', 'summary', 'experience', 'skills', 'education'],
-  dataAnalyst: ['summary', 'skills', 'projects', 'experience', 'education'],
-  classic: ['summary', 'experience', 'education', 'projects', 'certifications'],
-};
+export { DEFAULT_SECTION_ORDER, TEMPLATE_SECTION_PRIORITIES };
 
 export function normalizeSectionOrder(
   sectionOrder: unknown,
@@ -37,35 +18,27 @@ export function normalizeSectionOrder(
   const requestedOrder = Array.isArray(sectionOrder)
     ? sectionOrder.filter((sectionId): sectionId is string => typeof sectionId === 'string')
     : [];
-  const validSectionIds = new Set<string>([...DEFAULT_SECTION_ORDER, ...customSectionIds]);
-  const normalizedOrder = requestedOrder.filter(
-    (sectionId, index) =>
-      validSectionIds.has(sectionId) && requestedOrder.indexOf(sectionId) === index
-  );
+  const normalizedOrder = requestedOrder
+    .map(sectionId => canonicalizeSectionId(sectionId))
+    .filter((sectionId, index, array) => Boolean(sectionId) && array.indexOf(sectionId) === index);
 
   [...DEFAULT_SECTION_ORDER, ...customSectionIds].forEach(sectionId => {
-    if (!normalizedOrder.includes(sectionId)) normalizedOrder.push(sectionId);
+    const normalizedId = canonicalizeSectionId(sectionId);
+    const finalId = customSectionIds.includes(sectionId) ? sectionId : normalizedId;
+    if (!normalizedOrder.includes(finalId)) normalizedOrder.push(finalId);
   });
 
-  return normalizedOrder;
+  return normalizedOrder.filter(sectionId => sectionId === 'languages' || sectionId === 'volunteering' || customSectionIds.includes(sectionId) || Boolean(canonicalizeSectionId(sectionId)));
 }
 
 export function resolveResumeSectionOrder(
-  resume: Pick<ResumeData, 'sectionOrder' | 'sectionOrderMode' | 'customSections' | 'templateId'>,
-  templateId: TemplateId = resume.templateId
+  resume: Pick<ResumeData, 'sectionOrder' | 'sectionOrderMode' | 'customSections' | 'templateId'> & Partial<ResumeData>,
+  templateId = resume.templateId
 ): string[] {
-  const normalizedOrder = normalizeSectionOrder(
-    resume.sectionOrder,
-    resume.customSections.map(section => section.id)
-  );
-  if (resume.sectionOrderMode !== 'template') return normalizedOrder;
-
-  const priority = TEMPLATE_SECTION_PRIORITIES[templateId];
-  const prioritized = priority.filter(sectionId => normalizedOrder.includes(sectionId));
-  return [
-    ...prioritized,
-    ...normalizedOrder.filter(sectionId => !prioritized.includes(sectionId)),
-  ];
+  if (resume.sectionOrderMode === 'template') {
+    return getRecommendedSectionOrder(templateId, resume);
+  }
+  return getSectionOrder(resume);
 }
 
 export function serializeResumeBySectionOrder(resume: ResumeData): string {

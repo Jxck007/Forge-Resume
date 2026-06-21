@@ -1,13 +1,13 @@
 import { TemplateId } from '../types';
 
 export const resumeTypography = {
-  name: 19,
-  title: 10.5,
+  name: 18.4,
+  title: 10,
   sectionHeader: 11,
   entryTitle: 10,
   date: 9,
-  body: 10,
-  metadata: 9,
+  body: 9.5,
+  metadata: 8.5,
 } as const;
 
 export const resumeSpacing = {
@@ -146,7 +146,7 @@ export const resumeTemplatePlans: Record<TemplateId, ResumeTemplatePlan> = {
     density: 'dense',
     header: 'technical',
     entry: 'rail',
-    skills: 'compact-grid',
+    skills: 'rows',
     sectionOrder: ['summary', 'skills', 'projects', 'experience', 'education', 'certifications', 'achievements'],
     bodyLayout: 'single',
     summaryStyle: 'plain',

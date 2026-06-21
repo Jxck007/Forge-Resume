@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User } from 'firebase/auth';
-import { saveUserProfile, saveUserSettings, getUserSettings } from '../services/firebase';
-import { aiParseProfileImport } from '../services/groq';
+import { saveUserProfile, saveUserSettings } from '../services/firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ProfileData,
@@ -13,7 +12,6 @@ import {
   SkillCategory,
   CustomSection,
   CustomSectionItem,
-  UserSettings,
 } from '../types';
 import ImageCropperModal from './ImageCropperModal';
 import {
@@ -24,11 +22,12 @@ import {
   getEducationScoreType,
   normalizeEducationScore,
 } from '../utils/educationScore';
+import { ReviewedImport } from '../utils/aiImportQuality';
 import {
-  assessProfileImport,
-  ReviewedImport,
-  runAiImportSingleFlight,
-} from '../utils/aiImportQuality';
+  readStorageJson,
+  storageKeys,
+  writeStorageJson,
+} from '../utils/storageKeys';
 import {
   User as UserIcon,
   Mail,
@@ -65,6 +64,7 @@ import {
   ExternalLink,
   Layers,
   Edit3,
+  LogOut,
 } from 'lucide-react';
 
 interface MyProfileProps {
@@ -73,6 +73,7 @@ interface MyProfileProps {
   profile: ProfileData | null;
   onProfileUpdate: (profile: ProfileData) => void;
   dbConnected: boolean;
+  onLogout: () => void;
 }
 
 type ActiveSectionTab =
@@ -308,19 +309,17 @@ function ReviewModal({ review, onConfirm, onCancel }: ReviewModalProps) {
 }
 
 // ─────────────────── MAIN COMPONENT ───────────────────
-export default function MyProfile({ user, showToasts, profile, onProfileUpdate, dbConnected }: MyProfileProps) {
+export default function MyProfile({ user, showToasts, profile, onProfileUpdate, dbConnected, onLogout }: MyProfileProps) {
   const [loading, setLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveSectionTab>('personal');
   const [cropModalSrc, setCropModalSrc] = useState<string | null>(null);
-  const [userSettings, setUserSettings] = useState<UserSettings | null>(null);
 
   // AI Import states
   const [importMode, setImportMode] = useState<'pdf' | 'docx' | 'image' | 'text' | null>(null);
   const [importText, setImportText] = useState('');
   const [importParsing, setImportParsing] = useState(false);
   const [reviewData, setReviewData] = useState<ReviewedImport<ProfileData> | null>(null);
-  const [importProgress, setImportProgress] = useState(0);
   const [importStatus, setImportStatus] = useState('');
   const importInProgressRef = useRef(false);
 
@@ -354,23 +353,14 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
       setLocalProfile({ ...EMPTY_PROFILE(user.uid, user.email || ''), ...profile });
     } else {
       try {
-        const cached = localStorage.getItem(`forge_profile_${user.uid}`);
-        if (cached) {
-          setLocalProfile({ ...EMPTY_PROFILE(user.uid, user.email || ''), ...JSON.parse(cached) });
+        const cached = readStorageJson<ProfileData>(storageKeys.user.profile(user.uid));
+        if (cached?.uid === user.uid) {
+          setLocalProfile({ ...EMPTY_PROFILE(user.uid, user.email || ''), ...cached });
         }
       } catch (err) {
         console.error('Failed reading profile cache', err);
       }
     }
-    // Load settings for AI provider check
-    getUserSettings(user.uid).then(s => {
-      if (s) setUserSettings(s);
-    }).catch(() => {
-      try {
-        const cs = localStorage.getItem(`forge_settings_${user.uid}`);
-        if (cs) setUserSettings(JSON.parse(cs));
-      } catch {}
-    });
   }, [profile, user.uid]);
 
   // ── SAVE ──
@@ -385,7 +375,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
     showToasts('Saving profile...', 'info');
     try {
       const toSave: ProfileData = { ...localProfile, updatedAt: new Date().toISOString() };
-      localStorage.setItem(`forge_profile_${user.uid}`, JSON.stringify(toSave));
+      writeStorageJson(storageKeys.user.profile(user.uid), toSave);
       await saveUserProfile(user.uid, toSave);
       onProfileUpdate(toSave);
       await saveUserSettings(user.uid, { hasCompletedProfile: true });
@@ -565,12 +555,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
   const removeCustomItem = (sectionId: string, itemId: string) => setLocalProfile(p => ({ ...p, customSections: (p.customSections || []).map(s => s.id === sectionId ? { ...s, items: s.items.filter(i => i.id !== itemId) } : s) }));
 
   // ── AI IMPORT ──
-  const isAiConfigured = userSettings && (
-    (userSettings.aiProvider === 'Groq' && !!userSettings.groqApiKey) ||
-    (userSettings.aiProvider === 'Gemini' && !!userSettings.geminiApiKey) ||
-    (userSettings.aiProvider === 'OpenAI' && !!userSettings.openaiApiKey) ||
-    (userSettings.aiProvider === 'OpenRouter' && !!userSettings.openRouterApiKey)
-  );
+  const isAiConfigured = false;
 
   const extractTextFromPdf = async (file: File): Promise<string> => {
     const pdfjsLib = await import('pdfjs-dist');
@@ -614,13 +599,12 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
       return;
     }
     if (!isAiConfigured) {
-      showToasts('Please configure an AI provider in Settings first.', 'error');
+      showToasts('Assisted import is being upgraded. You can update your profile manually for now.', 'info');
       return;
     }
 
     importInProgressRef.current = true;
     setImportParsing(true);
-    setImportProgress(20);
     setImportStatus('Extracting resume text...');
     showToasts('Extracting text from file...', 'info');
     try {
@@ -634,19 +618,9 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
         return;
       }
 
-      showToasts('Parsing with AI...', 'info');
-      setImportProgress(60);
-      setImportStatus('Verifying extracted information...');
-      const review = await runAiImportSingleFlight(async () => {
-        const parsed = await aiParseProfileImport(userSettings!, rawText);
-        return assessProfileImport(parsed, rawText);
-      });
-      setReviewData(review);
-      setImportProgress(100);
-      setImportStatus('Ready for review');
-    } catch (err: any) {
-      console.error(err);
-      showToasts(err?.message || 'Import failed. Check file format and AI settings.', 'error');
+      showToasts('Profile import is temporarily paused. Update your profile manually for now.', 'info');
+    } catch {
+      showToasts('Assisted import is currently unavailable.', 'error');
     } finally {
       importInProgressRef.current = false;
       setImportParsing(false);
@@ -659,23 +633,16 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
       return;
     }
     if (!importText.trim()) { showToasts('Please paste some resume text first.', 'info'); return; }
-    if (!isAiConfigured) { showToasts('Please configure an AI provider in Settings first.', 'error'); return; }
+    if (!isAiConfigured) { showToasts('Assisted import is being upgraded. You can update your profile manually for now.', 'info'); return; }
 
     importInProgressRef.current = true;
     setImportParsing(true);
-    setImportProgress(35);
     setImportStatus('Verifying extracted information...');
-    showToasts('Parsing with AI...', 'info');
+    showToasts('Profile import is temporarily paused. Update your profile manually for now.', 'info');
     try {
-      const review = await runAiImportSingleFlight(async () => {
-        const parsed = await aiParseProfileImport(userSettings!, importText);
-        return assessProfileImport(parsed, importText);
-      });
-      setReviewData(review);
-      setImportProgress(100);
-      setImportStatus('Ready for review');
-    } catch (err: any) {
-      showToasts(err?.message || 'AI parsing failed.', 'error');
+      return;
+    } catch {
+      showToasts('Assisted import is currently unavailable.', 'error');
     } finally {
       importInProgressRef.current = false;
       setImportParsing(false);
@@ -733,7 +700,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
   ];
 
   return (
-    <div className="forge-product-page forge-profile-page mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <div className="forge-product-page forge-profile-page mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8" data-tour="profile-page">
       {/* Crop Modal */}
       {cropModalSrc && (
         <ImageCropperModal imageSrc={cropModalSrc} onClose={() => setCropModalSrc(null)} onCropComplete={handleCropComplete} />
@@ -810,14 +777,19 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
                   )}
                 </div>
               </div>
-              <button
-                onClick={handleSaveProfile}
-                disabled={loading}
-                id="btn-profile-sync"
-                className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-5 rounded-xl shadow-lg shadow-indigo-900/30 transition hover:scale-[1.02] active:scale-99 cursor-pointer self-start sm:self-auto shrink-0 text-sm"
-              >
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /><span>Sync Profile</span></>}
-              </button>
+              <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+                <button type="button" onClick={onLogout} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-4 text-sm font-semibold text-zinc-300 transition hover:border-rose-800 hover:text-rose-300">
+                  <LogOut className="h-4 w-4" /> Logout
+                </button>
+                <button
+                  onClick={handleSaveProfile}
+                  disabled={loading}
+                  id="btn-profile-sync"
+                  className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-indigo-600 px-5 text-sm font-bold text-white transition hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Save className="h-4 w-4" /><span>Sync Profile</span></>}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -907,11 +879,11 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
             {!isAiConfigured && (
               <div className="flex items-start gap-2 text-[11px] text-amber-400 bg-amber-950/15 border border-amber-900/30 p-3 rounded-xl font-medium leading-relaxed">
                 <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                <span>Configure an AI provider in <span className="font-bold underline">Settings</span> to enable AI import.</span>
+                <span>Assisted import is being upgraded. You can update your profile manually for now.</span>
               </div>
             )}
 
-            <p className="text-[11px] text-zinc-500 leading-relaxed">Import an existing resume and review the structured profile details before saving.</p>
+            <p className="text-[11px] text-zinc-500 leading-relaxed">Profile import is temporarily paused while the assisted import boundary is rebuilt.</p>
 
             {/* Import method selector */}
             <div className="grid grid-cols-2 gap-2">
@@ -975,18 +947,8 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
             </AnimatePresence>
 
             {importParsing && (
-              <div className="space-y-2 text-xs text-indigo-400 font-semibold bg-indigo-950/20 border border-indigo-900/30 p-3 rounded-xl">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin shrink-0" />{importStatus}</span>
-                  <span>{importProgress}%</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-zinc-800">
-                  <motion.div
-                    className="h-full rounded-full bg-indigo-400"
-                    animate={{ width: `${importProgress}%` }}
-                    transition={{ duration: 0.25 }}
-                  />
-                </div>
+              <div className="flex items-center gap-2 rounded-xl border border-indigo-900/30 bg-indigo-950/20 p-3 text-xs font-semibold text-indigo-300" role="status" aria-live="polite">
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin" />{importStatus}
               </div>
             )}
           </div>
@@ -995,7 +957,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
         {/* ── RIGHT COLUMN: TABS ── */}
         <div className="forge-profile-editor lg:col-span-8 space-y-4">
           {/* Tab bar */}
-          <div className="forge-profile-tabs flex border-b border-zinc-800 overflow-x-auto no-scrollbar gap-0.5">
+          <div className="forge-profile-tabs flex border-b border-zinc-800 overflow-x-auto no-scrollbar gap-0.5" data-tour="profile-tabs">
             {tabs.map(tab => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;

@@ -20,7 +20,7 @@ export function HeaderBlock({
   styles,
 }: HeaderBlockProps) {
   return (
-    <View style={styles.header} wrap={false}>
+    <View style={styles.header}>
       <View style={styles.headerCopy}>
         <Text style={styles.name}>{details.fullName || 'Your Name'}</Text>
         {details.professionalTitle ? (

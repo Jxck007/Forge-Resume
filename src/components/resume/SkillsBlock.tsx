@@ -46,7 +46,7 @@ export function SkillsBlock({
           <View
             key={label}
             style={variant === 'compact-grid' ? styles.compactSkillGroup : styles.skillRow}
-            wrap={false}
+            wrap
           >
             <Text style={styles.skillLabel}>{label}:</Text>
             <Text style={styles.skillValues}>{values.join(', ')}</Text>
