@@ -1,8 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash } from 'crypto';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import { buildAiPrompt } from '../../src/ai/promptBuilder';
-import type { AiRewriteStyle, AiTask } from '../../src/ai/types';
+import { buildAiPrompt } from './promptBuilder';
+import type { AiRewriteStyle, AiTask } from './types';
 import { getAdminAuth, getAdminDb } from '../firebaseAdmin';
 
 type ApiRequest = IncomingMessage & { body?: unknown };
