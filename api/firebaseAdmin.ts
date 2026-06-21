@@ -43,7 +43,7 @@ export const getAdminApp = () => {
       credential: cert({
         projectId: account.project_id,
         clientEmail: account.client_email,
-        privateKey: account.private_key,
+        privateKey: process.env.FIREBASE_ADMIN_PRIVATE_KEY?.replace(/\\n/g, "\n") || account.private_key,
       }),
     });
   } catch (error) {
