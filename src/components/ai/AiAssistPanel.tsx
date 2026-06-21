@@ -49,6 +49,8 @@ export default function AiAssistPanel({ showToasts }: AiAssistPanelProps) {
         ? 'Forge Free AI provider setup is incomplete. Use BYOK or continue manually.'
         : state.freeStatusReason === 'admin_not_configured'
           ? 'Server AI setup is incomplete.'
+        : state.freeStatusReason === 'firestore_error'
+          ? 'Free AI status could not reach its server data. Try again shortly or use BYOK.'
         : state.freeStatusReason === 'guest'
           ? 'Sign in to use Forge Free AI.'
           : 'Server AI is not configured correctly.';

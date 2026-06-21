@@ -14,6 +14,22 @@ type ApiResponse = ServerResponse & {
 
 const LIMIT = 25;
 const WINDOW_HOURS = 12;
+type StatusReason =
+  | 'guest'
+  | 'admin_not_configured'
+  | 'missing_provider_keys'
+  | 'firestore_error'
+  | 'env_disabled'
+  | 'firestore_disabled'
+  | 'ok';
+
+const getConfiguredStatus = () => ({
+  admin: isFirebaseAdminConfigured(),
+  groq: Boolean(process.env.GROQ_API_KEY?.trim()),
+  cerebras: Boolean(process.env.CEREBRAS_API_KEY?.trim()),
+  gemini: Boolean(process.env.GEMINI_API_KEY?.trim()),
+  freeBetaEnv: process.env.AI_FREE_BETA_ENABLED === 'true',
+});
 
 const getNextResetAt = () => {
   const now = new Date();
@@ -27,16 +43,17 @@ const sendStatus = (
   input: {
     signedIn: boolean;
     freeBetaAvailable: boolean;
-    reason?: 'guest' | 'env_disabled' | 'firestore_disabled' | 'missing_provider_keys' | 'admin_not_configured' | 'server_error';
+    reason: StatusReason;
     used?: number;
   }
 ) => {
   response.setHeader('Cache-Control', 'private, no-store');
   return response.status(200).json({
-  ok: true,
+  ok: input.reason === 'ok',
   signedIn: input.signedIn,
   freeBetaAvailable: input.freeBetaAvailable,
-  ...(input.reason ? { reason: input.reason } : {}),
+  reason: input.reason,
+  configured: getConfiguredStatus(),
   limit: LIMIT,
   used: input.used || 0,
   actionsRemaining: input.signedIn ? Math.max(0, LIMIT - (input.used || 0)) : 0,
@@ -52,8 +69,7 @@ export default async function handler(request: ApiRequest, response: ApiResponse
   }
 
   if (!isFirebaseAdminConfigured()) {
-    response.setHeader('Cache-Control', 'private, no-store');
-    return response.status(503).json({ ok: false, reason: 'admin_not_configured' });
+    return sendStatus(response, { signedIn: false, freeBetaAvailable: false, reason: 'admin_not_configured' });
   }
 
   const authorization = request.headers.authorization || '';
@@ -74,11 +90,6 @@ export default async function handler(request: ApiRequest, response: ApiResponse
       return sendStatus(response, { signedIn: true, freeBetaAvailable: false, reason: 'env_disabled' });
     }
 
-    const configSnapshot = await db.doc('aiSystem/config').get();
-    if (configSnapshot.exists && configSnapshot.data()?.freeBetaEnabled === false) {
-      return sendStatus(response, { signedIn: true, freeBetaAvailable: false, reason: 'firestore_disabled' });
-    }
-
     const hasProviderKey = Boolean(
       process.env.GROQ_API_KEY?.trim() ||
       process.env.CEREBRAS_API_KEY?.trim() ||
@@ -88,16 +99,20 @@ export default async function handler(request: ApiRequest, response: ApiResponse
       return sendStatus(response, { signedIn: true, freeBetaAvailable: false, reason: 'missing_provider_keys' });
     }
 
+    const configSnapshot = await db.doc('aiSystem/config').get();
+    if (configSnapshot.exists && configSnapshot.data()?.freeBetaEnabled === false) {
+      return sendStatus(response, { signedIn: true, freeBetaAvailable: false, reason: 'firestore_disabled' });
+    }
+
     const day = new Date().toISOString().slice(0, 10);
     const usageSnapshot = await db.doc(`aiUsage/${uid}/days/${day}`).get();
     const rawUsed = Number(usageSnapshot.data()?.actionsUsed || 0);
     const used = Number.isFinite(rawUsed) ? Math.max(0, rawUsed) : 0;
-    return sendStatus(response, { signedIn: true, freeBetaAvailable: true, used });
+    return sendStatus(response, { signedIn: true, freeBetaAvailable: true, reason: 'ok', used });
   } catch (error) {
     if (isFirebaseAdminConfigurationError(error)) {
-      response.setHeader('Cache-Control', 'private, no-store');
-      return response.status(503).json({ ok: false, reason: 'admin_not_configured' });
+      return sendStatus(response, { signedIn: false, freeBetaAvailable: false, reason: 'admin_not_configured' });
     }
-    return sendStatus(response, { signedIn: true, freeBetaAvailable: false, reason: 'server_error' });
+    return sendStatus(response, { signedIn: true, freeBetaAvailable: false, reason: 'firestore_error' });
   }
 }

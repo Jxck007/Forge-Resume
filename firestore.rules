@@ -49,27 +49,40 @@ service cloud.firestore {
 
     match /resumes/{resumeId} {
       function resumeOwnedByCurrentUser(data) {
-        return (data.ownerId == request.auth.uid || data.userId == request.auth.uid)
-          && data.ownerId == data.userId;
+        return (data.keys().hasAll(['ownerId']) && data.ownerId == request.auth.uid)
+          || (data.keys().hasAll(['userId']) && data.userId == request.auth.uid);
+      }
+
+      function resumeOwnersAreConsistent(data) {
+        return !data.keys().hasAll(['ownerId', 'userId'])
+          || data.ownerId == data.userId;
       }
 
       allow create: if isSignedIn()
-        && request.resource.data.keys().hasAll(['id', 'ownerId', 'userId'])
+        && request.resource.data.keys().hasAll(['id'])
+        && request.resource.data.keys().hasAny(['ownerId', 'userId'])
         && request.resource.data.id == resumeId
-        && resumeOwnedByCurrentUser(request.resource.data);
+        && resumeOwnedByCurrentUser(request.resource.data)
+        && resumeOwnersAreConsistent(request.resource.data);
 
       allow read, delete: if isSignedIn()
         && resource.data.keys().hasAny(['ownerId', 'userId'])
-        && resumeOwnedByCurrentUser(resource.data);
+        && resumeOwnedByCurrentUser(resource.data)
+        && resumeOwnersAreConsistent(resource.data);
 
       allow update: if isSignedIn()
         && resource.data.keys().hasAny(['ownerId', 'userId'])
         && resumeOwnedByCurrentUser(resource.data)
-        && request.resource.data.keys().hasAll(['id', 'ownerId', 'userId'])
+        && resumeOwnersAreConsistent(resource.data)
+        && request.resource.data.keys().hasAll(['id'])
+        && request.resource.data.keys().hasAny(['ownerId', 'userId'])
         && request.resource.data.id == resumeId
         && resumeOwnedByCurrentUser(request.resource.data)
-        && request.resource.data.ownerId == resource.data.ownerId
-        && request.resource.data.userId == resource.data.userId;
+        && resumeOwnersAreConsistent(request.resource.data)
+        && (!resource.data.keys().hasAll(['ownerId'])
+          || request.resource.data.ownerId == resource.data.ownerId)
+        && (!resource.data.keys().hasAll(['userId'])
+          || request.resource.data.userId == resource.data.userId);
     }
 
     match /feedback/{feedbackId} {
