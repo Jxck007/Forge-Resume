@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { buildAiPrompt } from './promptBuilder';
 import type { AiRewriteStyle, AiTask } from './types';
-import { getAdminAuth, getAdminDb } from '../firebaseAdmin';
+import { getAdminAuth, getAdminDb, isFirebaseAdminConfigurationError } from '../firebaseAdmin';
 
 type ApiRequest = IncomingMessage & { body?: unknown };
 type ApiResponse = ServerResponse & {
@@ -221,7 +221,10 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     try {
       auth = getAdminAuth();
       db = getAdminDb();
-    } catch {
+    } catch (error) {
+      if (isFirebaseAdminConfigurationError(error)) {
+        throw new SafeApiError(503, 'ADMIN_NOT_CONFIGURED', 'Server AI setup is incomplete.');
+      }
       throw new SafeApiError(503, 'SERVER_ERROR', 'Server AI is not configured correctly.');
     }
 

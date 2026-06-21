@@ -1,7 +1,7 @@
 export type AiMode = 'local' | 'free' | 'byok';
 
 export type AiProviderId = 'gemini' | 'groq' | 'cerebras' | 'openrouter';
-export type FreeAiStatusReason = 'guest' | 'env_disabled' | 'firestore_disabled' | 'missing_provider_keys' | 'server_error';
+export type FreeAiStatusReason = 'guest' | 'env_disabled' | 'firestore_disabled' | 'missing_provider_keys' | 'admin_not_configured' | 'server_error';
 
 export type AiRewriteStyle =
   | 'professional'

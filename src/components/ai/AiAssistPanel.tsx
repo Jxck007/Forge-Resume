@@ -47,6 +47,8 @@ export default function AiAssistPanel({ showToasts }: AiAssistPanelProps) {
       ? 'Forge Free AI is temporarily paused. Use BYOK or continue manually.'
       : state.freeStatusReason === 'missing_provider_keys'
         ? 'Forge Free AI provider setup is incomplete. Use BYOK or continue manually.'
+        : state.freeStatusReason === 'admin_not_configured'
+          ? 'Server AI setup is incomplete.'
         : state.freeStatusReason === 'guest'
           ? 'Sign in to use Forge Free AI.'
           : 'Server AI is not configured correctly.';

@@ -50,6 +50,7 @@ const FREE_AI_ERRORS: Record<string, string> = {
   GLOBAL_LIMIT: 'Forge Free AI is busy right now. Try BYOK or continue manually.',
   PROVIDERS_BUSY: 'Forge Free AI is busy right now. Try BYOK or continue manually.',
   MISSING_PROVIDER_KEYS: 'Forge Free AI provider setup is incomplete. Use BYOK or continue manually.',
+  ADMIN_NOT_CONFIGURED: 'Server AI setup is incomplete.',
   SERVER_ERROR: 'Server AI is not configured correctly.',
   REPEATED_SPAM: 'Please wait before trying again.',
   IP_DAILY_LIMIT: 'Daily free AI limit reached. Use BYOK or continue manually.',
@@ -361,6 +362,8 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
         if (!response.ok || !payload?.ok || typeof payload.text !== 'string') {
           const unavailableReason: FreeAiStatusReason | null = payload?.code === 'MISSING_PROVIDER_KEYS'
             ? 'missing_provider_keys'
+            : payload?.code === 'ADMIN_NOT_CONFIGURED'
+              ? 'admin_not_configured'
             : payload?.code === 'FREE_BETA_DISABLED'
               ? 'firestore_disabled'
               : payload?.code === 'SERVER_ERROR'

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { getAdminAuth, getAdminDb } from '../firebaseAdmin';
+import { getAdminAuth, getAdminDb, isFirebaseAdminConfigurationError } from '../firebaseAdmin';
 
 type ApiRequest = IncomingMessage;
 type ApiResponse = ServerResponse & {
@@ -22,7 +22,7 @@ const sendStatus = (
   input: {
     signedIn: boolean;
     freeBetaAvailable: boolean;
-    reason?: 'guest' | 'env_disabled' | 'firestore_disabled' | 'missing_provider_keys' | 'server_error';
+    reason?: 'guest' | 'env_disabled' | 'firestore_disabled' | 'missing_provider_keys' | 'admin_not_configured' | 'server_error';
     used?: number;
   }
 ) => {
@@ -83,7 +83,10 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     const rawUsed = Number(usageSnapshot.data()?.actionsUsed || 0);
     const used = Number.isFinite(rawUsed) ? Math.max(0, rawUsed) : 0;
     return sendStatus(response, { signedIn: true, freeBetaAvailable: true, used });
-  } catch {
+  } catch (error) {
+    if (isFirebaseAdminConfigurationError(error)) {
+      return sendStatus(response, { signedIn: true, freeBetaAvailable: false, reason: 'admin_not_configured' });
+    }
     return sendStatus(response, { signedIn: true, freeBetaAvailable: false, reason: 'server_error' });
   }
 }
