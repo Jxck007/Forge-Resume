@@ -853,7 +853,7 @@ function ResumeBuilder({
               ? 'Sign in to use Forge Free Beta AI or BYOK Assist.'
               : isAiConfigured
                 ? aiState.mode === 'free' && aiState.freeActionsRemaining !== null
-                  ? `${aiState.freeActionsRemaining} free actions remaining today. Suggestions always require approval.`
+                  ? `${aiState.freeActionsRemaining} free actions remaining in this window. Suggestions always require approval.`
                   : 'Suggestions always require your approval before applying.'
                 : 'Choose Free Beta AI or connect a session-only provider.'}
           </p>

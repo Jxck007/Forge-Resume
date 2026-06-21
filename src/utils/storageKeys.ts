@@ -23,7 +23,7 @@ export const storageKeys = {
     resume: (uid: string, resumeId: string) => `${userPrefix(uid)}:resume:${resumeId}`,
   },
   client: {
-    deviceId: `${STORAGE_PREFIX}:client:deviceId`,
+    deviceId: 'forge_device_id',
   },
   legacy: {
     // Legacy global keys are intentionally retained only as ignored markers.
@@ -41,12 +41,11 @@ export function getOrCreateForgeDeviceId(): string {
   try {
     let existing = readStorageValue(forgeDeviceIdKey);
     if (existing) return existing;
-    const randomBytes = crypto.getRandomValues(new Uint8Array(16));
-    const nextId = Array.from(randomBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    const nextId = crypto.randomUUID();
     writeStorageValue(forgeDeviceIdKey, nextId);
     return nextId;
   } catch {
-    return 'unknown-device';
+    return `ephemeral-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 }
 

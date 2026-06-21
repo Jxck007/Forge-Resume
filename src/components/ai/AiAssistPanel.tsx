@@ -43,14 +43,10 @@ export default function AiAssistPanel({ showToasts }: AiAssistPanelProps) {
     : 'Sign in to unlock limited free AI or use BYOK if enabled later.';
   const freeUnavailableMessage = state.freeStatusReason === 'env_disabled'
     ? 'Forge Free AI is temporarily disabled. Use BYOK or continue manually.'
-    : state.freeStatusReason === 'firestore_disabled'
-      ? 'Forge Free AI is temporarily paused. Use BYOK or continue manually.'
-      : state.freeStatusReason === 'missing_provider_keys'
+    : state.freeStatusReason === 'missing_provider_keys'
         ? 'Forge Free AI provider setup is incomplete. Use BYOK or continue manually.'
-        : state.freeStatusReason === 'admin_not_configured'
-          ? 'Server AI setup is incomplete.'
-        : state.freeStatusReason === 'firestore_error'
-          ? 'Free AI status could not reach its server data. Try again shortly or use BYOK.'
+        : state.freeStatusReason === 'quota_store_missing'
+          ? 'Free AI quota store is not configured.'
         : state.freeStatusReason === 'guest'
           ? 'Sign in to use Forge Free AI.'
           : 'Server AI is not configured correctly.';
@@ -90,12 +86,12 @@ export default function AiAssistPanel({ showToasts }: AiAssistPanelProps) {
           {state.mode === 'free' && (
             <div className={`md:col-span-2 rounded-xl border p-4 text-sm ${state.freeBetaAvailable ? 'border-emerald-500/20 bg-emerald-500/5 text-zinc-300' : 'border-amber-500/20 bg-amber-500/5 text-zinc-300'}`}>
               <strong className="text-white">Forge Free Beta AI</strong>
-              <p className="mt-1 text-zinc-400">Up to 25 writing actions per day and 3 pasted-text imports. Availability is shared and may pause during high demand.</p>
+              <p className="mt-1 text-zinc-400">Up to 25 writing actions and 3 pasted-text imports per 12-hour window. Availability is shared and may pause during high demand.</p>
               {state.freeStatusLoading ? (
                 <p className="mt-2 text-xs font-semibold text-zinc-300">Checking Free AI availability…</p>
               ) : state.freeBetaAvailable ? (
                 <p className="mt-2 text-xs font-semibold text-emerald-300">
-                  AI Assist unlocked · {state.freeActionsRemaining ?? 25} free actions remaining.
+                  Forge Free Beta AI ready · {state.freeActionsRemaining ?? 25} free actions remaining.
                 </p>
               ) : (
                 <div className="mt-2 flex flex-wrap items-center gap-3">

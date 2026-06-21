@@ -45,16 +45,16 @@ const FREE_AI_ERRORS: Record<string, string> = {
   EMPTY_INPUT: 'Add some text before using AI help.',
   INPUT_TOO_LONG: 'This text is too long for one AI action.',
   COOLDOWN: 'Please wait before trying again.',
-  DAILY_LIMIT: 'Daily free AI limit reached. Use BYOK or continue manually.',
-  IMPORT_LIMIT: 'Daily free import limit reached. Use BYOK or continue manually.',
+  DEVICE_LIMIT: 'Free AI limit reached for this device. Use BYOK or try again after reset.',
+  IP_LIMIT: 'Free AI limit reached for this network. Use BYOK or try again after reset.',
+  IMPORT_LIMIT: 'Free pasted-text import limit reached. Use BYOK or try again after reset.',
   GLOBAL_LIMIT: 'Forge Free AI is busy right now. Try BYOK or continue manually.',
   PROVIDERS_BUSY: 'Forge Free AI is busy right now. Try BYOK or continue manually.',
   MISSING_PROVIDER_KEYS: 'Forge Free AI provider setup is incomplete. Use BYOK or continue manually.',
-  ADMIN_NOT_CONFIGURED: 'Server AI setup is incomplete.',
+  QUOTA_STORE_MISSING: 'Free AI quota store is not configured.',
+  QUOTA_STORE_UNAVAILABLE: 'Free AI quota store is not configured.',
   SERVER_ERROR: 'Server AI is not configured correctly.',
   REPEATED_SPAM: 'Please wait before trying again.',
-  IP_DAILY_LIMIT: 'Daily free AI limit reached. Use BYOK or continue manually.',
-  DEVICE_DAILY_LIMIT: 'Daily free AI limit reached. Use BYOK or continue manually.',
 };
 
 const AiSessionContext = createContext<AiSessionContextValue | null>(null);
@@ -142,10 +142,11 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
     const uid = currentUser.uid;
     setState(current => ({ ...current, isConnected: false, freeStatusLoading: true, lastError: null }));
     try {
-      const idToken = await currentUser.getIdToken();
       const response = await fetch('/api/ai/status', {
         method: 'GET',
-        headers: { Authorization: `Bearer ${idToken}` },
+        headers: {
+          'X-Forge-Device': getOrCreateForgeDeviceId(),
+        },
       });
       const payload = await response.json().catch(() => null) as null | {
         ok?: boolean;
@@ -332,13 +333,11 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
       if (usingFreeAi) {
         const currentUser = getAuthInstance().currentUser;
         if (!currentUser) throw new Error(FREE_AI_ERRORS.AUTH_REQUIRED);
-        const idToken = await currentUser.getIdToken();
         const forgeDeviceId = getOrCreateForgeDeviceId();
         const response = await fetch('/api/ai/action', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${idToken}`,
             'X-Forge-Device': forgeDeviceId,
           },
           body: JSON.stringify({
@@ -362,10 +361,10 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
         if (!response.ok || !payload?.ok || typeof payload.text !== 'string') {
           const unavailableReason: FreeAiStatusReason | null = payload?.code === 'MISSING_PROVIDER_KEYS'
             ? 'missing_provider_keys'
-            : payload?.code === 'ADMIN_NOT_CONFIGURED'
-              ? 'admin_not_configured'
+            : payload?.code === 'QUOTA_STORE_MISSING' || payload?.code === 'QUOTA_STORE_UNAVAILABLE'
+              ? 'quota_store_missing'
             : payload?.code === 'FREE_BETA_DISABLED'
-              ? 'firestore_disabled'
+              ? 'env_disabled'
               : payload?.code === 'SERVER_ERROR'
                 ? 'server_error'
                 : payload?.code === 'AUTH_REQUIRED'

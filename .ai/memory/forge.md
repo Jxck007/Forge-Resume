@@ -94,4 +94,5 @@ BYOK AI Assist notes (2026-06-20):
 - Vercel AI functions use ESM-safe `.js` relative specifiers for TypeScript server helpers, preventing extensionless `/var/task/api/firebaseAdmin` runtime import failures.
 - Client Firestore uses owner-scoped top-level `profiles`, `resumes`, and paused `atsReports`, plus private `users/{uid}` and create-only `feedback`; the only realtime listener filters resumes by owner, and all `aiUsage`, `aiAbuse`, `aiSystem`, and `system` client access remains denied.
 - `/api/ai/status` returns HTTP 200 for expected unavailable states with explicit safe reasons and temporary boolean-only server configuration diagnostics; resume rules support legacy single-owner fields while preserving immutable ownership.
+- Forge Free Beta no longer depends on Firebase Admin or Firestore: server-side provider calls use hashed IP/device, global, import, cooldown, and 12-hour quotas through Upstash Redis REST; BYOK remains separate and guests remain UI-blocked.
 - Import Resume Beta defaults to compact pasted-text input; PDF, DOCX, and image controls are disabled and labeled Coming soon.
