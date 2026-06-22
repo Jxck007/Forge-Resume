@@ -10,7 +10,7 @@ Please expect active iteration around AI-assisted import, export polish, and ope
 
 ## Live demo
 
-- Production app: `TODO: add deployed URL`
+- Production app: [`Live Website`](https://forge-resume-six.vercel.app/)
 - Vercel preview deployments: available per deployment environment
 
 ## Screenshots
