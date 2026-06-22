@@ -193,12 +193,18 @@ export const getQuotaStatus = async (request: IncomingMessage) => {
   const identity = getQuotaIdentity(request);
   const window = getWindow();
   const keys = getKeys(identity, window.id);
-  const result = await redisCommand(['GET', keys.deviceActions]);
-  const parsed = Number(result || 0);
+  const [actionResult, importResult] = await Promise.all([
+    redisCommand(['GET', keys.deviceActions]),
+    redisCommand(['GET', keys.deviceImports]),
+  ]);
+  const parsed = Number(actionResult || 0);
+  const parsedImports = Number(importResult || 0);
   const used = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  const importsUsed = Number.isFinite(parsedImports) ? Math.max(0, parsedImports) : 0;
   return {
     used,
     actionsRemaining: Math.max(0, FREE_AI_QUOTA.deviceActions - used),
+    importsRemaining: Math.max(0, FREE_AI_QUOTA.imports - importsUsed),
     resetAt: window.resetAt,
   };
 };

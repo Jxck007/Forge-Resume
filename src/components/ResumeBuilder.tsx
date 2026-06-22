@@ -846,16 +846,30 @@ function ResumeBuilder({
         <div className="min-w-0">
           <h4 className="flex items-center gap-2 text-xs font-semibold text-white">
             <Sparkles className="h-3.5 w-3.5 text-emerald-300" />
-            {isAiConfigured ? `AI connected and ready · ${connectedProviderLabel}` : 'AI Assist Beta'}
+            Forge Free Beta AI
           </h4>
           <p className="mt-1 text-[11px] text-zinc-400">
+            Use AI to improve summaries, rewrite bullets, fix grammar, and import resumes. Every suggestion is reviewed before applying.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-zinc-500">
+            <span>25 writing actions per 12 hours</span>
+            <span>3 resume imports per 12 hours</span>
+            <span>Using your own key does not use Forge Free AI quota</span>
+          </div>
+          <p className="mt-2 text-[11px] text-zinc-400">
             {!aiEnabled
-              ? 'Sign in to use Forge Free Beta AI or BYOK Assist.'
+              ? 'Sign in to use Free AI'
               : isAiConfigured
                 ? aiState.mode === 'free' && aiState.freeActionsRemaining !== null
-                  ? `${aiState.freeActionsRemaining} free actions remaining in this window. Suggestions always require approval.`
-                  : 'Suggestions always require your approval before applying.'
-                : 'Choose Free Beta AI or connect a session-only provider.'}
+                  ? `${aiState.freeActionsRemaining} actions left${typeof aiState.freeImportsRemaining === 'number' ? ` · ${aiState.freeImportsRemaining} imports left` : ''}${aiState.freeResetAt ? ` · resets at ${new Date(aiState.freeResetAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}`
+                  : `BYOK connected · ${connectedProviderLabel}`
+                : aiState.freeStatusLoading
+                  ? 'Checking Free AI…'
+                  : aiState.freeStatusReason === 'quota_store_missing'
+                    ? 'Free AI quota store not configured'
+                    : aiState.freeStatusReason === 'missing_provider_keys'
+                      ? 'Free AI provider keys missing'
+                      : 'Free AI paused'}
           </p>
         </div>
         {aiEnabled && !isAiConfigured && onOpenAiAssist && (

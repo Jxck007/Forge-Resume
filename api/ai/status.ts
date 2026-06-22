@@ -27,6 +27,7 @@ const sendStatus = (
     reason: StatusReason;
     used?: number;
     actionsRemaining?: number;
+    importsRemaining?: number;
     resetAt?: string;
   }
 ) => {
@@ -43,8 +44,10 @@ const sendStatus = (
       freeBetaEnv: process.env.AI_FREE_BETA_ENABLED === 'true',
     },
     limit: FREE_AI_QUOTA.deviceActions,
+    importLimit: FREE_AI_QUOTA.imports,
     used: input.used || 0,
     actionsRemaining: input.actionsRemaining ?? FREE_AI_QUOTA.deviceActions,
+    importsRemaining: input.importsRemaining ?? FREE_AI_QUOTA.imports,
     resetAt: input.resetAt || getFallbackResetAt(),
     windowHours: FREE_AI_QUOTA.windowHours,
   });
@@ -74,6 +77,7 @@ export default async function handler(request: ApiRequest, response: ApiResponse
       reason: 'ok',
       used: quota.used,
       actionsRemaining: quota.actionsRemaining,
+      importsRemaining: quota.importsRemaining,
       resetAt: quota.resetAt,
     });
   } catch {

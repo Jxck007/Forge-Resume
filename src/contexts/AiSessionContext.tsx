@@ -32,6 +32,7 @@ const initialState: AiSessionState = {
   isTesting: false,
   lastError: null,
   freeActionsRemaining: null,
+  freeImportsRemaining: null,
   freeProvider: null,
   freeBetaAvailable: null,
   freeStatusReason: null,
@@ -134,6 +135,7 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
         freeStatusReason: 'guest',
         freeStatusLoading: false,
         freeActionsRemaining: 0,
+        freeImportsRemaining: 0,
         freeResetAt: null,
       }));
       return;
@@ -153,6 +155,7 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
         freeBetaAvailable?: boolean;
         reason?: FreeAiStatusReason;
         actionsRemaining?: number;
+        importsRemaining?: number;
         resetAt?: string;
       };
       if (getAuthInstance().currentUser?.uid !== uid) return;
@@ -164,6 +167,7 @@ export function AiSessionProvider({ children }: { children: React.ReactNode }) {
         freeStatusReason: available ? null : payload?.reason || 'server_error',
         freeStatusLoading: false,
         freeActionsRemaining: typeof payload?.actionsRemaining === 'number' ? payload.actionsRemaining : null,
+        freeImportsRemaining: typeof payload?.importsRemaining === 'number' ? payload.importsRemaining : null,
         freeResetAt: typeof payload?.resetAt === 'string' ? payload.resetAt : null,
       }));
     } catch {

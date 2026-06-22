@@ -339,10 +339,12 @@ export default function App() {
     if (!authReady || showProfileSetup || (!user && !isGuestMode) || (user && !workspaceHydrated)) return;
     const key = user ? storageKeys.user.tutorialCompleted(user.uid) : storageKeys.guest.tutorialCompleted;
     const legacyKey = user ? `forgeResume:user:${user.uid}:tutorialCompleted` : 'forgeResume:guest:tutorialCompleted';
-    if (readStorageValue(legacyKey) === 'true' && readStorageValue(key) !== 'true') {
-      writeStorageValue(key, 'true');
+    const currentValue = readStorageValue(key);
+    const legacyValue = readStorageValue(legacyKey);
+    if ((legacyValue === 'true' || legacyValue === 'completed') && currentValue !== 'completed') {
+      writeStorageValue(key, 'completed');
     }
-    if (readStorageValue(key) !== 'true') {
+    if (readStorageValue(key) !== 'completed') {
       navigateTo('/dashboard', 'dashboard');
       setTutorialContext('dashboard');
       setTutorialOpen(true);
@@ -351,7 +353,7 @@ export default function App() {
 
   const completeTutorial = React.useCallback(() => {
     const key = user ? storageKeys.user.tutorialCompleted(user.uid) : storageKeys.guest.tutorialCompleted;
-    writeStorageValue(key, 'true');
+    writeStorageValue(key, 'completed');
     setTutorialOpen(false);
   }, [user]);
 

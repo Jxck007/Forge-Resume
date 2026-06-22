@@ -21,7 +21,7 @@ import {
   MoreHorizontal,
 } from 'lucide-react';
 import ConfirmationDialog from './ConfirmationDialog';
-import { extractResumeText, getImportAccept, ResumeImportMode, validateImportFile } from '../utils/resumeImport';
+import { extractResumeText, getImportAccept, prepareImageForImport, ResumeImportError, ResumeImportMode, validateImportFile } from '../utils/resumeImport';
 import { assessResumeImport, ReviewedImport } from '../utils/aiImportQuality';
 import TemplateShowcase, { TEMPLATE_IDS, TEMPLATE_LABELS } from './TemplateShowcase';
 import ActionMenu from './ActionMenu';
@@ -196,6 +196,9 @@ export default function Dashboard({
               : aiState.freeStatusReason === 'guest'
                 ? 'Sign in to use Free AI'
                 : 'Free AI paused';
+  const aiResetLabel = aiState.freeResetAt
+    ? new Date(aiState.freeResetAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : null;
 
   const resetImport = () => {
     setImportOpen(false);
@@ -252,25 +255,20 @@ export default function Dashboard({
         sourceLabel = `${importMode.toUpperCase()} file`;
         if (importMode === 'image') {
           setImportStatus('Preparing image for AI import...');
-          const imageBase64 = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
-            reader.onerror = () => reject(new Error('Unable to read image.'));
-            reader.readAsDataURL(importFile);
-          });
+          const { base64: imageBase64, mimeType } = await prepareImageForImport(importFile);
           const response = await fetch('/api/ai/import', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sourceType: 'image', imageBase64, mimeType: importFile.type || 'image/png', templateId: newTemplate }),
+            body: JSON.stringify({ sourceType: 'image', imageBase64, mimeType, templateId: newTemplate }),
           });
-          const payload = await response.json().catch(() => null) as null | { ok?: boolean; resume?: ResumeData; message?: string };
+          const payload = await response.json().catch(() => null) as null | { ok?: boolean; resume?: ResumeData; message?: string; warnings?: string[] };
           if (!response.ok || !payload?.ok || !payload.resume) {
             showToasts(payload?.message || 'This image could not be imported. Try a clearer file.', 'error');
             return;
           }
           const sourceText = JSON.stringify(payload.resume);
           setReviewData(assessResumeImport(payload.resume, sourceText));
-          setImportStatus('Ready for review');
+          setImportStatus(payload.warnings?.[0] || 'Ready for review');
           if (!importTitle) setImportTitle(importFile.name.replace(/\.[^.]+$/, '') || 'Imported Resume');
           return;
         }
@@ -298,19 +296,21 @@ export default function Dashboard({
           templateId: newTemplate,
         }),
       });
-      const payload = await response.json().catch(() => null) as null | { ok?: boolean; resume?: ResumeData; message?: string };
+      const payload = await response.json().catch(() => null) as null | { ok?: boolean; resume?: ResumeData; message?: string; warnings?: string[] };
       if (!mountedRef.current) return;
       if (!response.ok || !payload?.ok || !payload.resume) {
         showToasts(payload?.message || 'Resume import could not be completed.', 'error');
         return;
       }
       setReviewData(assessResumeImport(payload.resume, rawText));
-      setImportStatus('Ready for review');
+      setImportStatus(payload.warnings?.[0] || 'Ready for review');
       if (!importTitle) setImportTitle(titleFromFile || 'Imported Resume');
     } catch (error) {
       if (mountedRef.current) {
-        console.error(error);
-        showToasts('Resume import could not be completed. Check the source and AI connection, then try again.', 'error');
+        const message = error instanceof ResumeImportError
+          ? error.message
+          : 'Resume import could not be completed. Check the source and AI connection, then try again.';
+        showToasts(message, 'error');
       }
     } finally {
       importInProgressRef.current = false;
@@ -328,7 +328,7 @@ export default function Dashboard({
     try {
       await onSaveImport({ ...reviewData.data, title: importTitle.trim(), templateId: newTemplate });
       resetImport();
-      showToasts('Imported resume saved.', 'success');
+      showToasts('Resume imported. Review before exporting.', 'success');
     } catch (error: unknown) {
       showToasts(error instanceof Error ? error.message : 'Unable to save imported resume.', 'error');
     } finally {
@@ -437,6 +437,12 @@ export default function Dashboard({
           <span className="rounded-full bg-white/[0.04] px-2.5 py-1">Limits protect the beta from abuse and cost spikes</span>
           <span className="rounded-full bg-white/[0.04] px-2.5 py-1">Using your own key does not use Forge Free AI quota</span>
         </div>
+        {aiResetLabel && (
+          <div className="mt-3 flex flex-wrap gap-3 text-xs text-zinc-400">
+            {typeof aiState.freeActionsRemaining === 'number' && <span>{aiState.freeActionsRemaining} actions left · resets at {aiResetLabel}</span>}
+            {typeof aiState.freeImportsRemaining === 'number' && <span>{aiState.freeImportsRemaining} imports left · resets at {aiResetLabel}</span>}
+          </div>
+        )}
       </div>
 
       {isGuestMode && (
@@ -896,32 +902,29 @@ export default function Dashboard({
                     </div>
                   ) : (
                     <div className="space-y-5">
-                      <p className="text-sm text-zinc-400">
-                        Paste text import is available now. PDF and DOCX import are being upgraded and will return soon.
-                      </p>
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                         {[
-                          { id: 'pdf' as const, label: 'PDF', icon: FileText, comingSoon: true },
-                          { id: 'docx' as const, label: 'DOCX', icon: FileDown, comingSoon: true },
-                          { id: 'image' as const, label: 'Image', icon: ImageIcon, comingSoon: true },
-                          { id: 'text' as const, label: 'Paste Text', icon: ClipboardList, comingSoon: false },
+                          { id: 'pdf' as const, label: 'PDF', icon: FileText, disabled: false },
+                          { id: 'docx' as const, label: 'DOCX', icon: FileDown, disabled: false },
+                          { id: 'image' as const, label: 'Image', icon: ImageIcon, disabled: aiState.mode === 'free' && aiState.freeStatusReason === 'missing_provider_keys' },
+                          { id: 'text' as const, label: 'Paste Text', icon: ClipboardList, disabled: false },
                         ].map(option => (
                           <button
                             key={option.id}
                             type="button"
                             onClick={() => selectImportMode(option.id)}
-                            disabled={loadingAction || option.comingSoon}
+                            disabled={loadingAction || option.disabled}
                             className={`flex min-h-24 flex-col items-center justify-center gap-2 rounded-xl border p-3 text-xs font-bold transition ${
                               importMode === option.id
                                 ? 'border-emerald-400 bg-emerald-400/10 text-emerald-200'
-                                : option.comingSoon
+                                : option.disabled
                                   ? 'cursor-not-allowed border-zinc-800 bg-zinc-950/30 text-zinc-600'
                                   : 'border-zinc-700 bg-zinc-900/40 text-zinc-400 hover:border-zinc-600 hover:text-white'
                             }`}
                           >
                             <option.icon className="h-5 w-5" />
                             {option.label}
-                            {option.comingSoon && <span className="text-[10px] font-medium uppercase tracking-wide">Coming soon</span>}
+                            {option.id === 'image' && option.disabled && <span className="text-[10px] font-medium uppercase tracking-wide">Gemini required</span>}
                           </button>
                         ))}
                       </div>
@@ -953,9 +956,9 @@ export default function Dashboard({
                                 className="block w-full rounded-xl border border-[#2A2E37] bg-[#0F1115] px-4 py-3 text-sm text-zinc-300 file:mr-4 file:rounded-lg file:border-0 file:bg-white/[0.06] file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white"
                               />
                               <p className="mt-1 text-xs text-zinc-500">
-                                {importMode === 'pdf' && 'PDF uses local text extraction first. Scanned files may need another source.'}
+                                {importMode === 'pdf' && 'PDF uses local text extraction first. Weak or scanned PDFs may need image import, DOCX, or pasted text.'}
                                 {importMode === 'docx' && 'DOCX text is extracted in the browser.'}
-                                {importMode === 'image' && 'Images are sent to AI vision for structured extraction.'}
+                                {importMode === 'image' && 'Images are resized if needed, then sent to AI vision for structured extraction.'}
                               </p>
                             </>
                           ) : (
@@ -1030,9 +1033,12 @@ export default function Dashboard({
               )}
 
               <div className="flex flex-col-reverse gap-3 border-t border-[#2A2E37] p-6 sm:flex-row sm:items-center sm:justify-between">
-                <span className="text-xs text-zinc-500">
-                  {reviewData ? `${reviewSections.filter(section => section.ready).length} sections detected` : 'Nothing is saved until review is confirmed.'}
-                </span>
+                <div className="space-y-1">
+                  <span className="block text-xs text-zinc-500">
+                    {reviewData ? `${reviewSections.filter(section => section.ready).length} sections detected` : 'Nothing is saved until review is confirmed.'}
+                  </span>
+                  {importStatus && <span className="block text-xs text-zinc-400">{importStatus}</span>}
+                </div>
                 <div className="flex gap-3">
                   <button
                     type="button"

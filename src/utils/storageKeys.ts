@@ -9,7 +9,7 @@ export const storageKeys = {
     profileDraft: `${STORAGE_PREFIX}:guest:profileDraft`,
     atsCache: `${STORAGE_PREFIX}:guest:atsCache`,
     feedbackSubmissions: `${STORAGE_PREFIX}:guest:feedbackSubmissions`,
-    tutorialCompleted: `${STORAGE_PREFIX}:guest:onboarding:v2:guest`,
+    tutorialCompleted: `forge:onboarding:v2:guest`,
   },
   user: {
     activeResume: (uid: string) => `${userPrefix(uid)}:activeResume`,
@@ -17,7 +17,7 @@ export const storageKeys = {
     editorState: (uid: string) => `${userPrefix(uid)}:editorState`,
     atsCache: (uid: string) => `${userPrefix(uid)}:atsCache`,
     feedbackSubmissions: (uid: string) => `${userPrefix(uid)}:feedbackSubmissions`,
-    tutorialCompleted: (uid: string) => `${userPrefix(uid)}:onboarding:v2:${uid}`,
+    tutorialCompleted: (uid: string) => `forge:onboarding:v2:${uid}`,
     settingsTutorialCompleted: (uid: string) => `${userPrefix(uid)}:settingsTutorialCompleted`,
     resumeIndex: (uid: string) => `${userPrefix(uid)}:resumeIndex`,
     resume: (uid: string, resumeId: string) => `${userPrefix(uid)}:resume:${resumeId}`,

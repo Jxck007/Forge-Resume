@@ -31,6 +31,7 @@ export interface AiSessionState {
   isTesting: boolean;
   lastError: string | null;
   freeActionsRemaining: number | null;
+  freeImportsRemaining: number | null;
   freeProvider: 'groq' | 'cerebras' | 'gemini' | null;
   freeBetaAvailable: boolean | null;
   freeStatusReason: FreeAiStatusReason | null;
