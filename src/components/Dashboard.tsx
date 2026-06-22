@@ -12,9 +12,6 @@ import {
   Loader2,
   Sparkles,
   Upload,
-  FileDown,
-  Image as ImageIcon,
-  ClipboardList,
   X,
   CheckCircle2,
   AlertCircle,
@@ -22,7 +19,8 @@ import {
 } from 'lucide-react';
 import ConfirmationDialog from './ConfirmationDialog';
 import {
-  getImportAccept,
+  ALL_IMPORT_ACCEPT,
+  inferImportMode,
   prepareDocxImportPayload,
   prepareImageForImport,
   preparePdfImportPayload,
@@ -34,6 +32,7 @@ import { assessResumeImport, ReviewedImport } from '../utils/aiImportQuality';
 import TemplateShowcase, { TEMPLATE_IDS, TEMPLATE_LABELS } from './TemplateShowcase';
 import ActionMenu from './ActionMenu';
 import { useAiSession } from '../contexts/AiSessionContext';
+import { getOrCreateForgeDeviceId } from '../utils/storageKeys';
 
 interface DashboardProps {
   resumes: ResumeData[];
@@ -221,13 +220,29 @@ export default function Dashboard({
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const selectImportMode = (mode: ResumeImportMode) => {
-    setImportMode(mode);
-    setImportFile(null);
+  const handleImportFileSelected = (file: File | null) => {
     setReviewData(null);
     setImportWarnings([]);
     setImportTitle('');
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (!file) {
+      setImportFile(null);
+      setImportMode('text');
+      return;
+    }
+    const mode = inferImportMode(file);
+    if (!mode) {
+      showToasts('Choose a PDF, DOCX, PNG, JPG, JPEG, or WEBP file.', 'error');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+    const validationError = validateImportFile(file, mode);
+    if (validationError) {
+      showToasts(validationError, 'error');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+    setImportMode(mode);
+    setImportFile(file);
   };
 
   const handleImportParse = async () => {
@@ -250,7 +265,7 @@ export default function Dashboard({
       let requestBody: Record<string, unknown> | null = null;
       const collectedWarnings: string[] = [];
 
-      if (importMode === 'text') {
+      if (!importFile) {
         rawText = pastedText.trim();
         if (!rawText) {
           showToasts('Please paste the resume text before importing.', 'info');
@@ -281,10 +296,15 @@ export default function Dashboard({
           setImportStatus('Extracting text');
           const prepared = await preparePdfImportPayload(importFile);
           collectedWarnings.push(...prepared.warnings);
-          requestBody = prepared.sourceType === 'image'
-            ? { sourceType: 'image', imageBase64: prepared.imageBase64, mimeType: prepared.mimeType, templateId: newTemplate }
-            : { sourceType: 'pdf_text', text: prepared.text, templateId: newTemplate };
-          rawText = prepared.sourceType === 'pdf_text' ? prepared.text : '';
+          if (prepared.sourceType === 'pdf_hybrid') {
+            requestBody = { sourceType: 'pdf_hybrid', text: prepared.text, imageBase64: prepared.imageBase64, mimeType: prepared.mimeType, templateId: newTemplate };
+            rawText = prepared.text;
+          } else if ('text' in prepared) {
+            requestBody = { sourceType: 'pdf_text', text: prepared.text, templateId: newTemplate };
+            rawText = prepared.text;
+          } else {
+            requestBody = { sourceType: 'image', imageBase64: prepared.imageBase64, mimeType: prepared.mimeType, templateId: newTemplate };
+          }
         } else {
           setImportStatus('Extracting text');
           const prepared = await prepareDocxImportPayload(importFile);
@@ -300,11 +320,11 @@ export default function Dashboard({
       const titleFromFile = importFile?.name.replace(/\.[^.]+$/, '') || '';
       setImportTitle(prev => prev || titleFromFile || 'Imported Resume');
       showToasts(`Structuring ${sourceLabel} with AI...`, 'info');
-      setImportStatus('Structuring content');
+      setImportStatus('Running AI structuring');
 
       const response = await fetch('/api/ai/import', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Forge-Device': getOrCreateForgeDeviceId() },
         body: JSON.stringify(requestBody),
       });
       const payload = await response.json().catch(() => null) as null | { ok?: boolean; resume?: ResumeData; message?: string; warnings?: string[] };
@@ -347,6 +367,34 @@ export default function Dashboard({
     } finally {
       setLoadingAction(false);
     }
+  };
+
+  const updateImportedData = (patch: Partial<ResumeData>) => {
+    setReviewData(current => current ? { ...current, data: { ...current.data, ...patch } } : current);
+  };
+
+  const updateImportedPersonal = (field: keyof ResumeData['personalDetails'], value: string) => {
+    if (!reviewData) return;
+    updateImportedData({
+      personalDetails: {
+        fullName: '', professionalTitle: '', email: '', phone: '', location: '', linkedin: '', github: '', website: '',
+        ...(reviewData.data.personalDetails || {}),
+        [field]: value,
+      },
+    });
+  };
+
+  const updateImportedCollectionField = (
+    section: 'experience' | 'internships' | 'education' | 'projects' | 'certifications' | 'volunteering',
+    index: number,
+    field: string,
+    value: string
+  ) => {
+    if (!reviewData) return;
+    const items = [...((reviewData.data[section] || []) as Array<Record<string, unknown>>)].map(item => ({ ...item }));
+    if (!items[index]) return;
+    items[index][field] = value;
+    updateImportedData({ [section]: items } as Partial<ResumeData>);
   };
 
   const parsedReview = reviewData?.data;
@@ -408,18 +456,14 @@ export default function Dashboard({
       detail: parsedReview.languages?.join(', ') || 'Not detected',
     },
   ] : [];
-  const reviewConfidenceKey: Record<string, string> = {
-    'Personal details': 'personalDetails',
-    'Professional summary': 'summary',
-    Experience: 'experience',
-    Internships: 'internships',
-    Education: 'education',
-    Projects: 'projects',
-    Skills: 'skills',
-    'Certifications and achievements': 'certifications',
-    Languages: 'languages',
-  };
-
+  const editableCollections = parsedReview ? [
+    { key: 'experience' as const, label: 'Experience', fields: [['title', 'Role'], ['company', 'Company'], ['description', 'Description']] },
+    { key: 'internships' as const, label: 'Internships', fields: [['role', 'Role'], ['company', 'Company'], ['description', 'Description']] },
+    { key: 'education' as const, label: 'Education', fields: [['degree', 'Degree'], ['institution', 'Institution'], ['description', 'Details']] },
+    { key: 'projects' as const, label: 'Projects', fields: [['name', 'Project'], ['technologies', 'Technologies'], ['description', 'Description'], ['github', 'GitHub URL'], ['live', 'Live URL']] },
+    { key: 'certifications' as const, label: 'Certifications', fields: [['name', 'Certification'], ['issuer', 'Issuer'], ['url', 'Credential URL']] },
+    { key: 'volunteering' as const, label: 'Volunteering', fields: [['title', 'Role'], ['company', 'Organization'], ['description', 'Description']] },
+  ] : [];
   return (
     <div className="forge-product-page forge-dashboard-page mx-auto max-w-7xl px-4 py-6 font-sans sm:px-6 lg:px-8">
       <section className="mb-4 rounded-2xl bg-[#141A21] p-5 ring-1 ring-white/[0.06] sm:p-6">
@@ -923,100 +967,50 @@ export default function Dashboard({
                     </div>
                   ) : (
                     <div className="space-y-5">
-                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                        {[
-                          { id: 'pdf' as const, label: 'PDF', icon: FileText, disabled: false },
-                          { id: 'docx' as const, label: 'DOCX', icon: FileDown, disabled: false },
-                          { id: 'image' as const, label: 'Image', icon: ImageIcon, disabled: aiState.mode === 'free' && aiState.freeStatusReason === 'missing_provider_keys' },
-                          { id: 'text' as const, label: 'Paste Text', icon: ClipboardList, disabled: false },
-                        ].map(option => (
-                          <button
-                            key={option.id}
-                            type="button"
-                            onClick={() => selectImportMode(option.id)}
-                            disabled={loadingAction || option.disabled}
-                            className={`flex min-h-24 flex-col items-center justify-center gap-2 rounded-xl border p-3 text-xs font-bold transition ${
-                              importMode === option.id
-                                ? 'border-emerald-400 bg-emerald-400/10 text-emerald-200'
-                                : option.disabled
-                                  ? 'cursor-not-allowed border-zinc-800 bg-zinc-950/30 text-zinc-600'
-                                  : 'border-zinc-700 bg-zinc-900/40 text-zinc-400 hover:border-zinc-600 hover:text-white'
-                            }`}
-                          >
-                            <option.icon className="h-5 w-5" />
-                            {option.label}
-                            {option.id === 'image' && option.disabled && <span className="text-[10px] font-medium uppercase tracking-wide">Gemini required</span>}
-                          </button>
-                        ))}
+                      <div>
+                        <label className="mb-1.5 block text-xs font-semibold text-zinc-300">Paste resume text</label>
+                        <textarea
+                          value={pastedText}
+                          onChange={event => setPastedText(event.target.value)}
+                          rows={5}
+                          maxLength={12000}
+                          placeholder="Paste resume text, or upload a file below…"
+                          className="min-h-[150px] max-h-[250px] w-full resize-y rounded-xl border border-[#2A2E37] bg-[#0F1115] p-4 font-mono text-sm text-zinc-300 outline-none transition placeholder:text-zinc-600 hover:border-emerald-400/30 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10"
+                        />
+                        <p className="mt-1 text-right text-[10px] text-zinc-500">{pastedText.length}/12,000</p>
                       </div>
 
-                      {importMode === 'text' ? (
-                        <div>
-                          <label className="mb-1.5 block text-xs font-semibold text-zinc-300">
-                            Resume text for AI import
-                          </label>
-                          <textarea
-                            value={pastedText}
-                            onChange={event => setPastedText(event.target.value)}
-                            rows={5}
-                            maxLength={12000}
-                            placeholder="Paste your resume text here…"
-                            className="min-h-[160px] max-h-[260px] w-full resize-y rounded-xl border border-[#2A2E37] bg-[#0F1115] p-4 font-mono text-sm text-zinc-300 outline-none transition placeholder:text-zinc-600 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10"
-                          />
-                          <p className="mt-1 text-right text-[10px] text-zinc-500">{pastedText.length}/12,000</p>
-                        </div>
-                      ) : (
-                        <div>
-                          {assistedImportAvailable ? (
-                            <>
-                              <label className="group flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-[#344354] bg-[#0F1115] px-5 py-8 text-center transition hover:border-emerald-400/50 hover:bg-[#121821] focus-within:border-emerald-400/50 focus-within:ring-2 focus-within:ring-emerald-400/10">
-                                <Upload className="h-6 w-6 text-zinc-400 transition group-hover:text-emerald-300" />
-                                <div>
-                                  <p className="text-sm font-semibold text-white">
-                                    {importFile ? importFile.name : `Choose a ${importMode.toUpperCase()} file`}
-                                  </p>
-                                  <p className="mt-1 text-xs text-zinc-500">
-                                    {importMode === 'pdf' && 'Allowed: PDF up to 5MB'}
-                                    {importMode === 'docx' && 'Allowed: DOCX up to 5MB'}
-                                    {importMode === 'image' && 'Allowed: PNG, JPG, JPEG, WEBP up to 4MB'}
-                                  </p>
-                                </div>
-                                <input
-                                  ref={fileInputRef}
-                                  type="file"
-                                  accept={getImportAccept(importMode)}
-                                  onChange={event => setImportFile(event.target.files?.[0] || null)}
-                                  className="sr-only"
-                                />
-                              </label>
-                              <p className="mt-1 text-xs text-zinc-500">
-                                {importMode === 'pdf' && 'PDF uses local text extraction first. Weak or scanned PDFs may need image import, DOCX, or pasted text.'}
-                                {importMode === 'docx' && 'DOCX text is extracted in the browser.'}
-                                {importMode === 'image' && 'Images are resized if needed, then sent to AI vision for structured extraction.'}
-                              </p>
-                            </>
-                          ) : (
-                            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-200">
-                              Assisted import is not available right now.
+                      <div>
+                        <label onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); handleImportFileSelected(event.dataTransfer.files?.[0] || null); }} className="group flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-[#344354] bg-[#0F1115] px-5 py-7 text-center transition hover:border-emerald-400/50 hover:bg-[#121821] focus-within:border-emerald-400/50 focus-within:ring-2 focus-within:ring-emerald-400/10">
+                          <Upload className="h-6 w-6 text-zinc-400 transition group-hover:text-emerald-300" />
+                          <div>
+                            <p className="text-sm font-semibold text-white">Drop or choose a resume file</p>
+                            <p className="mt-1 text-xs text-zinc-500">PDF, DOCX, PNG, JPG, JPEG, or WEBP</p>
+                          </div>
+                          <input ref={fileInputRef} type="file" accept={ALL_IMPORT_ACCEPT} onChange={event => handleImportFileSelected(event.target.files?.[0] || null)} className="sr-only" />
+                        </label>
+                        {importFile && (
+                          <div className="mt-3 rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-3 text-xs text-zinc-300">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p><strong className="text-white">Selected:</strong> {importFile.name} · {importMode.toUpperCase()} · {importFile.size < 1024 * 1024 ? `${Math.ceil(importFile.size / 1024)} KB` : `${(importFile.size / 1024 / 1024).toFixed(1)} MB`}</p>
+                                <p className="mt-1 text-zinc-400"><strong className="text-zinc-300">Extraction:</strong> {importMode === 'pdf' ? 'local text + embedded links + Gemini fallback' : importMode === 'docx' ? 'local text and links + Gemini structuring' : 'Gemini vision'}</p>
+                              </div>
+                              <button type="button" onClick={() => handleImportFileSelected(null)} className="rounded-md p-1 text-zinc-500 hover:bg-white/5 hover:text-white" aria-label="Remove selected file"><X className="h-4 w-4" /></button>
                             </div>
-                          )}
-                        </div>
-                      )}
+                          </div>
+                        )}
+                        {importFile && pastedText.trim() && <p className="mt-2 text-xs text-amber-300">Both sources are present. Forge will use the selected file; remove it to use pasted text.</p>}
+                        <p className="mt-2 text-xs text-zinc-500">This import uses 1 AI import credit when AI extraction begins. Local-only file reading does not consume a credit.</p>
+                      </div>
                     </div>
                   )}
                 </div>
               ) : (
                 <div className="space-y-5 p-6">
-                  <div className="flex items-center justify-between rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
-                    <div>
-                      <p className="text-xs font-bold uppercase tracking-wider text-emerald-200">Import confidence</p>
-                      <p className="mt-0.5 text-xs text-zinc-500">
-                        {reviewData.confidence.rejectedFields} unsupported fields excluded
-                      </p>
-                    </div>
-                    <span className="rounded-full bg-emerald-400/15 px-3 py-1 text-sm font-black text-emerald-300">
-                      {reviewData.confidence.overall}%
-                    </span>
+                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
+                    <p className="text-xs font-bold uppercase tracking-wider text-emerald-200">Review before saving</p>
+                    <p className="mt-1 text-xs text-zinc-400">Check all extracted content. Missing fields are optional and can be completed in the builder.</p>
                   </div>
                   {importWarnings.length > 0 && (
                     <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
@@ -1039,9 +1033,68 @@ export default function Dashboard({
                     />
                     <span className="mt-1.5 block text-xs text-zinc-500">Use any name that helps identify this version. AI does not choose it for you.</span>
                   </label>
+                  <div className="grid gap-3 rounded-xl border border-[#2A2E37] bg-[#0F1115] p-4 sm:grid-cols-2">
+                    {([
+                      ['fullName', 'Full name', 'text'],
+                      ['email', 'Email', 'email'],
+                      ['phone', 'Phone', 'tel'],
+                      ['location', 'Location', 'text'],
+                      ['linkedin', 'LinkedIn URL', 'url'],
+                      ['github', 'GitHub URL', 'url'],
+                      ['website', 'Portfolio URL', 'url'],
+                    ] as const).map(([field, label, type]) => (
+                      <label key={field} className="block">
+                        <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-zinc-500">{label}</span>
+                        <input type={type} value={parsedReview?.personalDetails?.[field] || ''} onChange={event => updateImportedPersonal(field, event.target.value)} className="w-full rounded-lg border border-[#2A2E37] bg-[#171A21] px-3 py-2 text-xs text-white outline-none focus:border-emerald-400" />
+                      </label>
+                    ))}
+                    <label className="block sm:col-span-2">
+                      <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-zinc-500">Summary</span>
+                      <textarea value={parsedReview?.summary || ''} onChange={event => updateImportedData({ summary: event.target.value })} rows={4} className="w-full rounded-lg border border-[#2A2E37] bg-[#171A21] px-3 py-2 text-xs text-white outline-none focus:border-emerald-400" />
+                    </label>
+                  </div>
                   <div className="space-y-2">
-                    {reviewSections.map(section => {
-                      const confidence = reviewData.confidence.sections[reviewConfidenceKey[section.label]];
+                    {editableCollections.filter(section => (parsedReview?.[section.key] || []).length > 0).map(section => (
+                      <div key={section.key} className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-4">
+                        <p className="text-xs font-bold uppercase tracking-wider text-zinc-200">{section.label}</p>
+                        <div className="mt-3 space-y-3">
+                          {((parsedReview?.[section.key] || []) as Array<Record<string, unknown>>).map((item, index) => (
+                            <div key={String(item.id || index)} className="grid gap-2 rounded-lg border border-white/[0.06] bg-[#171A21] p-3 sm:grid-cols-2">
+                              {section.fields.map(([field, label]) => {
+                                const isLong = field === 'description';
+                                return (
+                                  <label key={field} className={isLong ? 'sm:col-span-2' : ''}>
+                                    <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-zinc-500">{label}</span>
+                                    {isLong ? (
+                                      <textarea rows={3} value={String(item[field] || '')} onChange={event => updateImportedCollectionField(section.key, index, field, event.target.value)} className="w-full rounded-lg border border-[#2A2E37] bg-[#0F1115] px-3 py-2 text-xs text-white outline-none focus:border-emerald-400" />
+                                    ) : (
+                                      <input type={field.toLowerCase().includes('url') || field === 'github' || field === 'live' ? 'url' : 'text'} value={String(item[field] || '')} onChange={event => updateImportedCollectionField(section.key, index, field, event.target.value)} className="w-full rounded-lg border border-[#2A2E37] bg-[#0F1115] px-3 py-2 text-xs text-white outline-none focus:border-emerald-400" />
+                                    )}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <div className="grid gap-3 rounded-xl border border-[#2A2E37] bg-[#0F1115] p-4 sm:grid-cols-2">
+                      <label>
+                        <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-zinc-500">Achievements · one per line</span>
+                        <textarea rows={4} value={(parsedReview?.achievements || []).join('\n')} onChange={event => updateImportedData({ achievements: event.target.value.split(/\n/).map(value => value.trim()).filter(Boolean) })} className="w-full rounded-lg border border-[#2A2E37] bg-[#171A21] px-3 py-2 text-xs text-white outline-none focus:border-emerald-400" />
+                      </label>
+                      <label>
+                        <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-zinc-500">Languages · one per line</span>
+                        <textarea rows={4} value={(parsedReview?.languages || []).join('\n')} onChange={event => updateImportedData({ languages: event.target.value.split(/\n/).map(value => value.trim()).filter(Boolean) })} className="w-full rounded-lg border border-[#2A2E37] bg-[#171A21] px-3 py-2 text-xs text-white outline-none focus:border-emerald-400" />
+                      </label>
+                      {Object.entries(parsedReview?.skills || {}).map(([category, values]) => (
+                        <label key={category}>
+                          <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-zinc-500">{category.replace(/([A-Z])/g, ' $1')}</span>
+                          <input value={(Array.isArray(values) ? values : []).join(', ')} onChange={event => updateImportedData({ skills: { ...(parsedReview?.skills || {}), [category]: event.target.value.split(',').map(value => value.trim()).filter(Boolean) } as ResumeData['skills'] })} className="w-full rounded-lg border border-[#2A2E37] bg-[#171A21] px-3 py-2 text-xs text-white outline-none focus:border-emerald-400" />
+                        </label>
+                      ))}
+                    </div>
+                    {reviewSections.filter(section => !section.ready).map(section => {
                       return (
                         <div
                           key={section.label}
@@ -1057,20 +1110,14 @@ export default function Dashboard({
                             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-zinc-600" />
                           )}
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center justify-between gap-3">
-                              <p className="text-xs font-bold uppercase tracking-wider text-zinc-200">{section.label}</p>
-                              {confidence && (
-                                <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-                                  {confidence.score}% {confidence.level}
-                                </span>
-                              )}
-                            </div>
-                            <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-5 text-zinc-400">{section.detail}</p>
+                            <p className="text-xs font-bold uppercase tracking-wider text-zinc-200">{section.label}</p>
+                            <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-5 text-zinc-500">Optional field not detected.</p>
                           </div>
                         </div>
                       );
                     })}
                   </div>
+                  <p className="text-xs text-zinc-500">Custom sections and any final formatting remain editable in the Builder before export.</p>
                 </div>
               )}
               </div>
@@ -1104,11 +1151,11 @@ export default function Dashboard({
                   <button
                     type="button"
                     onClick={reviewData ? handleImportSave : handleImportParse}
-                    disabled={isGuestMode || loadingAction || isGenerating || !assistedImportAvailable || !newTemplate || (Boolean(reviewData) && !importTitle.trim()) || (!reviewData && importMode === 'text' && !pastedText.trim()) || (!reviewData && importMode !== 'text' && !importFile)}
+                    disabled={isGuestMode || loadingAction || isGenerating || !assistedImportAvailable || !newTemplate || (Boolean(reviewData) && !importTitle.trim()) || (!reviewData && !importFile && !pastedText.trim())}
                     className="flex items-center gap-2 rounded-xl bg-emerald-400 px-5 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {loadingAction ? <Loader2 className="h-4 w-4 animate-spin" /> : reviewData ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-                    <span>{loadingAction ? 'Importing…' : reviewData ? 'Save imported resume' : importMode === 'text' ? 'Import resume text' : importMode === 'pdf' ? 'Import PDF resume' : importMode === 'docx' ? 'Import DOCX resume' : 'Import image resume'}</span>
+                    <span>{loadingAction ? (reviewData ? 'Saving…' : 'Extracting…') : reviewData ? 'Save resume' : 'Extract resume'}</span>
                   </button>
                 </div>
               </div>
@@ -1122,7 +1169,7 @@ export default function Dashboard({
                     <p className="mt-1 text-sm text-zinc-400">{reviewData ? 'Creating your imported draft' : importStatus || 'Preparing review'}</p>
                     {!reviewData && (
                       <div className="mt-4 grid grid-cols-2 gap-2 text-left text-xs text-zinc-500">
-                        {['Reading file', 'Extracting text', 'Structuring content', 'Preparing review'].map(step => (
+                        {['Reading file', 'Extracting text', 'Running AI structuring', 'Preparing review'].map(step => (
                           <div
                             key={step}
                             className={`rounded-xl border px-3 py-2 ${

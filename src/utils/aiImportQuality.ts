@@ -29,7 +29,7 @@ export interface ReviewedImport<T> {
 }
 
 const MIN_FIELD_CONFIDENCE = 70;
-const PLACEHOLDER_PATTERN = /^(?:n\/?a|none|unknown|not (?:available|provided|specified)|company name|project name|candidate|your name|example|tbd|-+)$/i;
+const PLACEHOLDER_PATTERN = /^(?:n\/?a|none|unknown|confidential|private|redacted|not (?:available|provided|specified)|company name|project name|candidate|your name|example|tbd|-+|\[object Object\])$/i;
 let importInProgress = false;
 
 export class ImportInProgressError extends Error {
@@ -121,7 +121,7 @@ type AssessmentState = {
 };
 
 const acceptText = (state: AssessmentState, section: string, value: unknown): string => {
-  const text = String(value ?? '').trim();
+  const text = extractMeaningfulText(value);
   const score = evidenceScore(text, state.source);
   if (score < MIN_FIELD_CONFIDENCE) {
     if (text) state.rejectedFields += 1;

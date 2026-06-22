@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { buildAiPrompt } from './promptBuilder.js';
-import { checkQuota, incrementQuota, isQuotaStoreConfigured, QuotaError } from './quota.js';
+import { consumeQuota, isQuotaStoreConfigured, QuotaError } from './quota.js';
 import type { AiRewriteStyle, AiTask } from './types.js';
 
 type ApiRequest = IncomingMessage & { body?: unknown };
@@ -194,7 +194,7 @@ export default async function handler(request: ApiRequest, response: ApiResponse
     }
 
     const isImport = action.task === 'import_text_resume';
-    const reservation = await checkQuota(request, isImport);
+    const quota = await consumeQuota(request, isImport);
 
     let result: { provider: ServerProvider; text: string } | null = null;
     for (const provider of SERVER_AI_ROUTES[action.task]) {
@@ -205,7 +205,6 @@ export default async function handler(request: ApiRequest, response: ApiResponse
       throw new SafeApiError(503, 'PROVIDERS_BUSY', 'Forge Free AI is busy right now. Try BYOK or continue manually.');
     }
 
-    const quota = await incrementQuota(reservation.identity, reservation.window, isImport);
     return response.status(200).json({
       ok: true,
       text: result.text,

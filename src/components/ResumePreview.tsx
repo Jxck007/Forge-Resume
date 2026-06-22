@@ -8,13 +8,14 @@ import React, {
   useState,
 } from 'react';
 import { pdf } from '@react-pdf/renderer';
-import { AlertTriangle, Braces, ChevronDown, Eye, FileDown, FileType2, Image, Loader2, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Eye, FileDown, FileType2, Image, Loader2, X } from 'lucide-react';
 import { ResumeData, TemplateId } from '../types';
 import ResumePdfDocument, {
   FORCE_SINGLE_PAGE_PROFILE,
   SINGLE_PAGE_MAX_COMPACT_LEVEL,
 } from './ResumePdfDocument';
 import ActionMenu from './ActionMenu';
+import { createResumeDocx, createResumePng, downloadBlob } from '../utils/resumeExport';
 
 interface ResumePreviewProps {
   resume: ResumeData;
@@ -51,7 +52,7 @@ const TEMPLATES: { id: TemplateId; name: string; description: string }[] = [
   { id: 'softwareEngineer', name: 'Software Developer', description: 'GitHub-inspired technology matrix with projects and stack first.' },
   { id: 'student', name: 'Academic Student', description: 'Merriweather and Inter combination with education-first ordering.' },
   { id: 'startup', name: 'Startup Growth', description: 'Compact achievement cards and projects-first ordering.' },
-  { id: 'designer', name: 'Designer Portfolio', description: 'True two-column portfolio layout with profile photo support.' },
+  { id: 'designer', name: 'Designer Portfolio', description: 'Dark corporate header with a compact two-column portfolio layout.' },
   { id: 'dataAnalyst', name: 'Data & Metrics', description: 'Capability indicators, project emphasis, and analytics hierarchy.' },
   { id: 'classic', name: 'Classical Editorial', description: 'Merriweather magazine typography with elegant double separators.' },
 ];
@@ -99,7 +100,8 @@ function ResumePreview({
   showToasts,
 }: ResumePreviewProps) {
   const [exportError, setExportError] = useState<{ message: string } | null>(null);
-  const [isExporting, setIsExporting] = useState(false);
+  const [exporting, setExporting] = useState<'pdf' | 'docx' | 'image' | null>(null);
+  const isExporting = exporting !== null;
   const [isPreviewRendering, setIsPreviewRendering] = useState(false);
   const [fitMode, setFitMode] = useState<FitMode>('single');
   const [fitResult, setFitResult] = useState<FitResult | null>(null);
@@ -320,29 +322,58 @@ function ResumePreview({
   const handleDownloadPDF = async () => {
     if (isExporting) return;
     setExportError(null);
-    setIsExporting(true);
+    setExporting('pdf');
     showToasts('Generating text-based PDF...', 'info');
     try {
       const blob = await createPdfBlob();
       const safeName = resume.personalDetails.fullName
         ? resume.personalDetails.fullName.replace(/[^a-z0-9]/gi, '_')
         : 'Resume';
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
       const modeLabel = fitMode === 'single' ? 'Single_Page' : 'Multi_Page';
-      anchor.download = `${safeName}_${modeLabel}.pdf`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `${safeName}_${modeLabel}.pdf`);
       showToasts('PDF downloaded successfully.', 'success');
     } catch {
       const message = 'Forge could not generate the PDF safely. Please try again.';
       setExportError({ message });
       showToasts(message, 'error');
     } finally {
-      setIsExporting(false);
+      setExporting(null);
+    }
+  };
+
+  const handleDownloadDocx = async () => {
+    if (isExporting) return;
+    setExportError(null);
+    setExporting('docx');
+    try {
+      const blob = await createResumeDocx(resume);
+      const safeName = resume.personalDetails.fullName?.replace(/[^a-z0-9]/gi, '_') || 'Resume';
+      downloadBlob(blob, `${safeName}.docx`);
+      showToasts('DOCX downloaded successfully.', 'success');
+    } catch {
+      const message = 'Forge could not generate the DOCX safely. Please try again.';
+      setExportError({ message });
+      showToasts(message, 'error');
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const handleDownloadImage = async () => {
+    if (isExporting) return;
+    setExportError(null);
+    setExporting('image');
+    try {
+      const blob = await createResumePng(await createPdfBlob());
+      const safeName = resume.personalDetails.fullName?.replace(/[^a-z0-9]/gi, '_') || 'Resume';
+      downloadBlob(blob, `${safeName}.png`);
+      showToasts('Resume image downloaded successfully.', 'success');
+    } catch {
+      const message = 'Forge could not generate the image safely. Please try again.';
+      setExportError({ message });
+      showToasts(message, 'error');
+    } finally {
+      setExporting(null);
     }
   };
 
@@ -354,12 +385,9 @@ function ResumePreview({
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-sm font-bold">
                 <AlertTriangle className="h-4 w-4" />
-                <span>PDF export failed</span>
+                <span>Export failed</span>
               </div>
               <div className="flex items-center gap-2">
-                <button type="button" onClick={handleDownloadPDF} disabled={isExporting || !hasPreview || singlePageBlocked} className="rounded-lg border border-rose-300/30 px-2.5 py-1 text-[11px] font-semibold text-rose-100 transition hover:bg-rose-900/60 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300">
-                  Retry PDF
-                </button>
                 <button type="button" onClick={() => setExportError(null)} className="rounded-full p-1 transition hover:bg-rose-900/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300" aria-label="Dismiss PDF error">
                   <X className="h-4 w-4" />
                 </button>
@@ -424,20 +452,15 @@ function ResumePreview({
                 No Photo
               </button>
             </div>
-            <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end">
-              <button type="button" data-tour="download-pdf" onClick={handleDownloadPDF} disabled={isExporting || !hasPreview || singlePageBlocked} className="flex min-h-10 items-center justify-center gap-1.5 rounded-lg bg-[#72DFCA] px-3 py-2 text-xs font-bold text-[#08110F] transition hover:bg-[#91E8D7] disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B5F5E8]">
-                {isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}
-                <span>{isExporting ? 'Generating...' : 'Export PDF'}</span>
-              </button>
+            <div className="flex w-full justify-end sm:w-auto" data-tour="download-pdf">
               <ActionMenu
                 triggerLabel="Open export options"
-                triggerClassName="flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-[#344354] bg-[#111827] px-3 py-2 text-xs font-bold text-zinc-100 transition hover:border-[#526579] hover:bg-[#182231] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#72DFCA]"
-                triggerContent={<><span>More exports</span><ChevronDown className="h-3.5 w-3.5" /></>}
+                triggerClassName="flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-[#72DFCA] px-4 py-2 text-xs font-bold text-[#08110F] transition hover:bg-[#91E8D7] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B5F5E8] sm:w-auto"
+                triggerContent={<>{isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}<span>{exporting ? `Exporting ${exporting.toUpperCase()}…` : 'Export'}</span><ChevronDown className="h-3.5 w-3.5" /></>}
                 items={[
-                  { label: 'PDF', icon: <FileDown className="h-4 w-4" />, onSelect: handleDownloadPDF, disabled: isExporting || !hasPreview || singlePageBlocked },
-                  { label: 'DOCX — Coming soon', icon: <FileType2 className="h-4 w-4" />, onSelect: () => {}, disabled: true },
-                  { label: 'PNG — Coming soon', icon: <Image className="h-4 w-4" />, onSelect: () => {}, disabled: true },
-                  { label: 'JSON — Coming soon', icon: <Braces className="h-4 w-4" />, onSelect: () => {}, disabled: true },
+                  { label: 'Export PDF', icon: <FileDown className="h-4 w-4" />, onSelect: handleDownloadPDF, disabled: isExporting || !hasPreview || singlePageBlocked },
+                  { label: 'Export DOCX', icon: <FileType2 className="h-4 w-4" />, onSelect: handleDownloadDocx, disabled: isExporting },
+                  { label: 'Export Image', icon: <Image className="h-4 w-4" />, onSelect: handleDownloadImage, disabled: isExporting || !hasPreview || singlePageBlocked },
                 ]}
               />
             </div>

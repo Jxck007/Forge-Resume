@@ -9,6 +9,7 @@ const FILE_LIMITS = {
 type PdfPageRender = {
   canvas: HTMLCanvasElement;
   text: string;
+  links: string[];
 };
 
 export type PreparedImportPayload =
@@ -17,6 +18,14 @@ export type PreparedImportPayload =
       text: string;
       warnings: string[];
       extractionMethod: 'text';
+    }
+  | {
+      sourceType: 'pdf_hybrid';
+      text: string;
+      imageBase64: string;
+      mimeType: string;
+      warnings: string[];
+      extractionMethod: 'hybrid';
     }
   | {
       sourceType: 'image';
@@ -40,6 +49,14 @@ const isPdfTextWeak = (text: string) => {
   const replacementChars = (cleaned.match(/[�□]/g) || []).length;
   const alphaRatio = alphaChars / Math.max(cleaned.length, 1);
   return replacementChars > 6 || alphaRatio < 0.45;
+};
+
+const isPdfContentIncomplete = (text: string) => {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  const projectIndex = normalized.search(/\bprojects?\b/i);
+  if (projectIndex < 0) return false;
+  const projectTail = normalized.slice(projectIndex, projectIndex + 500);
+  return projectTail.length < 120 || projectTail.split(/[.!?]/).filter(Boolean).length < 2;
 };
 
 const getPdfLib = async () => {
@@ -71,7 +88,22 @@ const renderPdfPages = async (file: File): Promise<PdfPageRender[]> => {
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
-    const text = content.items.map((item: any) => item.str || '').join(' ').replace(/\s+/g, ' ').trim();
+    const textItems = content.items
+      .filter((item: any) => typeof item.str === 'string' && item.str.trim())
+      .map((item: any) => ({ text: item.str.trim(), x: Number(item.transform?.[4] || 0), y: Number(item.transform?.[5] || 0) }))
+      .sort((a, b) => Math.abs(b.y - a.y) > 4 ? b.y - a.y : a.x - b.x);
+    const lines: string[] = [];
+    let previousY: number | null = null;
+    textItems.forEach(item => {
+      if (previousY !== null && Math.abs(previousY - item.y) > 4) lines.push('\n');
+      lines.push(item.text);
+      previousY = item.y;
+    });
+    const annotations = await page.getAnnotations();
+    const links = annotations
+      .map((annotation: any) => String(annotation.url || annotation.unsafeUrl || '').trim())
+      .filter(Boolean);
+    const text = lines.join(' ').replace(/ *\n */g, '\n').replace(/[ \t]+/g, ' ').trim();
     const viewport = page.getViewport({ scale: 1.45 });
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');
@@ -79,7 +111,7 @@ const renderPdfPages = async (file: File): Promise<PdfPageRender[]> => {
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
     await page.render({ canvas, canvasContext: context, viewport }).promise;
-    pages.push({ canvas, text });
+    pages.push({ canvas, text, links });
   }
 
   return pages;
@@ -126,14 +158,22 @@ const scaleCanvas = (source: HTMLCanvasElement, scale: number) => {
 export async function extractResumeText(file: File, mode: Exclude<ResumeImportMode, 'text'>): Promise<string> {
   if (mode === 'pdf') {
     const pages = await renderPdfPages(file);
-    return pages.map(page => page.text).filter(Boolean).join('\n');
+    const links = Array.from(new Set(pages.flatMap(page => page.links)));
+    return [pages.map(page => page.text).filter(Boolean).join('\n'), links.length ? `Embedded links:\n${links.join('\n')}` : ''].filter(Boolean).join('\n');
   }
 
   if (mode === 'docx') {
     try {
       const mammoth = (await import('mammoth')).default;
-      const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
-      return result.value;
+      const result = await mammoth.convertToHtml({ arrayBuffer: await file.arrayBuffer() });
+      const document = new DOMParser().parseFromString(result.value, 'text/html');
+      document.querySelectorAll('br').forEach(node => node.replaceWith('\n'));
+      document.querySelectorAll('p,h1,h2,h3,h4,h5,h6,li').forEach(node => node.append('\n'));
+      const links = Array.from(document.querySelectorAll('a[href]'))
+        .map(anchor => `${anchor.textContent?.trim() || 'Link'}: ${anchor.getAttribute('href') || ''}`)
+        .filter(value => !value.endsWith(': '));
+      return [document.body.textContent || '', links.length ? `Embedded links:\n${links.join('\n')}` : '']
+        .filter(Boolean).join('\n').replace(/\n{3,}/g, '\n\n').trim();
     } catch {
       throw new ResumeImportError('This DOCX file could not be read. Try another file.', 'docx_unreadable');
     }
@@ -144,10 +184,14 @@ export async function extractResumeText(file: File, mode: Exclude<ResumeImportMo
 
 export async function preparePdfImportPayload(file: File): Promise<PreparedImportPayload> {
   const pages = await renderPdfPages(file);
-  const text = pages.map(page => page.text).filter(Boolean).join('\n');
+  const links = Array.from(new Set(pages.flatMap(page => page.links)));
+  const text = [
+    pages.map(page => page.text).filter(Boolean).join('\n'),
+    links.length ? `Embedded links:\n${links.join('\n')}` : '',
+  ].filter(Boolean).join('\n');
   const warnings: string[] = [];
 
-  if (!isPdfTextWeak(text)) {
+  if (!isPdfTextWeak(text) && !isPdfContentIncomplete(text)) {
     return {
       sourceType: 'pdf_text',
       text,
@@ -156,7 +200,7 @@ export async function preparePdfImportPayload(file: File): Promise<PreparedImpor
     };
   }
 
-  warnings.push('Selectable PDF text looked weak, so image fallback was used for better extraction.');
+  warnings.push('Forge combined selectable PDF text with page images because local extraction looked incomplete.');
 
   const merged = await mergeCanvases(pages.map(page => page.canvas));
   let candidate = merged;
@@ -185,11 +229,12 @@ export async function preparePdfImportPayload(file: File): Promise<PreparedImpor
   }
 
   return {
-    sourceType: 'image',
+    sourceType: 'pdf_hybrid',
+    text,
     imageBase64: base64,
     mimeType: 'image/jpeg',
     warnings,
-    extractionMethod: 'vision',
+    extractionMethod: 'hybrid',
   };
 }
 
@@ -210,6 +255,16 @@ export function getImportAccept(mode: Exclude<ResumeImportMode, 'text'>): string
     return '.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   }
   return 'image/jpeg,image/png,image/webp';
+}
+
+export const ALL_IMPORT_ACCEPT = '.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp';
+
+export function inferImportMode(file: File): Exclude<ResumeImportMode, 'text'> | null {
+  const extension = file.name.split('.').pop()?.toLowerCase();
+  if (extension === 'pdf') return 'pdf';
+  if (extension === 'docx') return 'docx';
+  if (['jpg', 'jpeg', 'png', 'webp'].includes(extension || '')) return 'image';
+  return null;
 }
 
 export function validateImportFile(file: File, mode: Exclude<ResumeImportMode, 'text'>): string | null {

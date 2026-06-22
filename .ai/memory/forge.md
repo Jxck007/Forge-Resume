@@ -96,3 +96,10 @@ BYOK AI Assist notes (2026-06-20):
 - `/api/ai/status` returns HTTP 200 for expected unavailable states with explicit safe reasons and temporary boolean-only server configuration diagnostics; resume rules support legacy single-owner fields while preserving immutable ownership.
 - Forge Free Beta no longer depends on Firebase Admin or Firestore: server-side provider calls use hashed IP/device, global, import, cooldown, and 12-hour quotas through Upstash Redis REST; BYOK remains separate and guests remain UI-blocked.
 - Import Resume Beta defaults to compact pasted-text input; PDF, DOCX, and image controls are disabled and labeled Coming soon.
+
+Template/export/import notes (2026-06-22):
+- Designer Portfolio now uses a charcoal, muted-gold, compact two-column React-PDF layout and matching gallery card.
+- Preview export is one real PDF/DOCX/PNG menu; PNG rasterizes the production PDF so preview/export stay aligned.
+- Builder writing suggestions run local section checks after a 1s pause and require Apply/Ignore; AI writing remains user-triggered.
+- Import uses one paste-plus-file panel, local PDF/DOCX extraction with links, Gemini vision fallback, editable review, and strict scalar normalization.
+- Free AI action/import quota is atomically consumed in Upstash immediately before provider execution; only hashed IP/device identifiers are used.
