@@ -3,6 +3,7 @@ import { normalizeSectionOrder } from './utils/sectionOrder';
 import { normalizeEducationScore } from './utils/educationScore';
 import { analyzeResumeLanguageQuality } from './utils/languageQuality';
 import { createDefaultSectionConfig, normalizeSectionConfig } from './utils/resolveSectionHeading';
+import { normalizeBulletList, normalizeLanguageList, normalizeSkillList } from './utils/importNormalization';
 
 export function normalizeResume(data: any): ResumeData {
   const normalizedResume: ResumeData = {
@@ -72,11 +73,11 @@ export function normalizeResume(data: any): ResumeData {
       live: p.live || '',
     })) : [],
     skills: {
-      programmingLanguages: Array.isArray(data.skills?.programmingLanguages) ? data.skills.programmingLanguages : [],
-      frameworks: Array.isArray(data.skills?.frameworks) ? data.skills.frameworks : [],
-      tools: Array.isArray(data.skills?.tools) ? data.skills.tools : [],
-      databases: Array.isArray(data.skills?.databases) ? data.skills.databases : [],
-      softSkills: Array.isArray(data.skills?.softSkills) ? data.skills.softSkills : [],
+      programmingLanguages: normalizeSkillList(data.skills?.programmingLanguages),
+      frameworks: normalizeSkillList(data.skills?.frameworks),
+      tools: normalizeSkillList(data.skills?.tools),
+      databases: normalizeSkillList(data.skills?.databases),
+      softSkills: normalizeSkillList(data.skills?.softSkills),
     },
     certifications: Array.isArray(data.certifications) ? data.certifications.map((c: any) => ({
       id: c.id || Math.random().toString(36).substring(2, 9),
@@ -85,7 +86,7 @@ export function normalizeResume(data: any): ResumeData {
       date: c.date || '',
       url: c.url || '',
     })) : [],
-    achievements: Array.isArray(data.achievements) ? data.achievements : [],
+    achievements: normalizeBulletList(data.achievements),
     volunteering: Array.isArray(data.volunteering) ? data.volunteering.map((v: any) => ({
       id: v.id || Math.random().toString(36).substring(2, 9),
       title: v.title || '',
@@ -95,7 +96,7 @@ export function normalizeResume(data: any): ResumeData {
       endDate: v.endDate || '',
       description: v.description || '',
     })) : [],
-    languages: Array.isArray(data.languages) ? data.languages : [],
+    languages: normalizeLanguageList(data.languages),
     customSections: Array.isArray(data.customSections) ? data.customSections.map((s: any) => ({
       id: s.id || Math.random().toString(36).substring(2, 9),
       title: s.title || '',
@@ -191,11 +192,11 @@ export function normalizeResume(data: any): ResumeData {
         live: p.live || '',
       })) : [],
       skills: {
-        programmingLanguages: Array.isArray(data.skills?.programmingLanguages) ? data.skills.programmingLanguages : [],
-        frameworks: Array.isArray(data.skills?.frameworks) ? data.skills.frameworks : [],
-        tools: Array.isArray(data.skills?.tools) ? data.skills.tools : [],
-        databases: Array.isArray(data.skills?.databases) ? data.skills.databases : [],
-        softSkills: Array.isArray(data.skills?.softSkills) ? data.skills.softSkills : [],
+        programmingLanguages: normalizeSkillList(data.skills?.programmingLanguages),
+        frameworks: normalizeSkillList(data.skills?.frameworks),
+        tools: normalizeSkillList(data.skills?.tools),
+        databases: normalizeSkillList(data.skills?.databases),
+        softSkills: normalizeSkillList(data.skills?.softSkills),
       },
       certifications: Array.isArray(data.certifications) ? data.certifications.map((c: any) => ({
         id: c.id || Math.random().toString(36).substring(2, 9),
@@ -204,7 +205,7 @@ export function normalizeResume(data: any): ResumeData {
         date: c.date || '',
         url: c.url || '',
       })) : [],
-      achievements: Array.isArray(data.achievements) ? data.achievements : [],
+      achievements: normalizeBulletList(data.achievements),
       volunteering: Array.isArray(data.volunteering) ? data.volunteering.map((v: any) => ({
         id: v.id || Math.random().toString(36).substring(2, 9),
         title: v.title || '',
@@ -214,7 +215,7 @@ export function normalizeResume(data: any): ResumeData {
         endDate: v.endDate || '',
         description: v.description || '',
       })) : [],
-      languages: Array.isArray(data.languages) ? data.languages : [],
+      languages: normalizeLanguageList(data.languages),
       customSections: Array.isArray(data.customSections) ? data.customSections.map((s: any) => ({
         id: s.id || Math.random().toString(36).substring(2, 9),
         title: s.title || '',

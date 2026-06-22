@@ -1,5 +1,12 @@
 import { ProfileData, ResumeData } from '../types';
 import { normalizeEducationScore } from './educationScore';
+import {
+  extractMeaningfulText,
+  normalizeBulletList,
+  normalizeLanguageList,
+  normalizeSkillList,
+  normalizeStringList,
+} from './importNormalization';
 
 export type ImportConfidenceLevel = 'high' | 'medium' | 'low';
 
@@ -59,12 +66,6 @@ const asObjectArray = (value: unknown): Record<string, any>[] => {
     : [record];
 };
 
-const asStringArray = (value: unknown): string[] => {
-  if (Array.isArray(value)) return value.map(item => String(item ?? '').trim()).filter(Boolean);
-  if (typeof value === 'string') return value.split(/[,\n]/).map(item => item.trim()).filter(Boolean);
-  return [];
-};
-
 const normalizeEvidence = (value: string) =>
   value
     .toLowerCase()
@@ -75,6 +76,25 @@ const normalizeEvidence = (value: string) =>
 
 const meaningfulTokens = (value: string) =>
   normalizeEvidence(value).split(' ').filter(token => token.length > 1);
+
+const buildEvidenceText = (parsedValue: unknown) => {
+  const parsed = asRecord(parsedValue);
+  const personal = asRecord(parsed.personalDetails);
+  return [
+    extractMeaningfulText(personal.fullName),
+    extractMeaningfulText(personal.professionalTitle),
+    extractMeaningfulText(personal.email),
+    extractMeaningfulText(personal.phone),
+    extractMeaningfulText(parsed.summary),
+    ...normalizeBulletList(parsed.achievements),
+    ...normalizeLanguageList(parsed.languages),
+    ...normalizeStringList(parsed.skills),
+    ...normalizeStringList(parsed.experience),
+    ...normalizeStringList(parsed.education),
+    ...normalizeStringList(parsed.projects),
+    ...normalizeStringList(parsed.certifications),
+  ].filter(Boolean).join(' ');
+};
 
 const evidenceScore = (value: unknown, source: string): number => {
   const text = String(value ?? '').trim();
@@ -113,7 +133,17 @@ const acceptText = (state: AssessmentState, section: string, value: unknown): st
 };
 
 const acceptList = (state: AssessmentState, section: string, value: unknown) =>
-  asStringArray(value)
+  normalizeStringList(value)
+    .map(item => acceptText(state, section, item))
+    .filter(Boolean);
+
+const acceptBulletList = (state: AssessmentState, section: string, value: unknown) =>
+  normalizeBulletList(value)
+    .map(item => acceptText(state, section, item))
+    .filter(Boolean);
+
+const acceptLanguageList = (state: AssessmentState, section: string, value: unknown) =>
+  normalizeLanguageList(value)
     .map(item => acceptText(state, section, item))
     .filter(Boolean);
 
@@ -150,7 +180,8 @@ const createState = (rawText: string): AssessmentState => ({
 });
 
 const sanitizeImport = (parsedValue: unknown, rawText: string, includeCareerObjective: boolean) => {
-  const state = createState(rawText);
+  const fallbackEvidence = buildEvidenceText(parsedValue);
+  const state = createState(rawText.trim().length >= 80 ? rawText : `${rawText}\n${fallbackEvidence}`.trim());
   const parsed = asRecord(parsedValue);
   const personal = asRecord(parsed.personalDetails);
   const skills = asRecord(parsed.skills);
@@ -238,16 +269,16 @@ const sanitizeImport = (parsedValue: unknown, rawText: string, includeCareerObje
     internships,
     projects,
     skills: {
-      programmingLanguages: acceptList(state, 'skills', skills.programmingLanguages),
-      frameworks: acceptList(state, 'skills', skills.frameworks),
-      tools: acceptList(state, 'skills', skills.tools),
-      databases: acceptList(state, 'skills', skills.databases),
-      softSkills: acceptList(state, 'skills', skills.softSkills),
+      programmingLanguages: normalizeSkillList(skills.programmingLanguages).map(item => acceptText(state, 'skills', item)).filter(Boolean),
+      frameworks: normalizeSkillList(skills.frameworks).map(item => acceptText(state, 'skills', item)).filter(Boolean),
+      tools: normalizeSkillList(skills.tools).map(item => acceptText(state, 'skills', item)).filter(Boolean),
+      databases: normalizeSkillList(skills.databases).map(item => acceptText(state, 'skills', item)).filter(Boolean),
+      softSkills: normalizeSkillList(skills.softSkills).map(item => acceptText(state, 'skills', item)).filter(Boolean),
     },
     certifications,
-    achievements: acceptList(state, 'achievements', parsed.achievements),
+    achievements: acceptBulletList(state, 'achievements', parsed.achievements),
     volunteering,
-    languages: acceptList(state, 'languages', parsed.languages),
+    languages: acceptLanguageList(state, 'languages', parsed.languages),
   };
   if (includeCareerObjective) {
     data.careerObjective = acceptText(state, 'careerObjective', parsed.careerObjective);

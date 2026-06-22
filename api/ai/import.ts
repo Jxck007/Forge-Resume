@@ -1,5 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { checkQuota, incrementQuota, isQuotaStoreConfigured, QuotaError } from './quota.js';
+import {
+  normalizeBulletList,
+  normalizeLanguageList,
+  normalizeSkillList,
+  normalizeStringList,
+} from '../../src/utils/importNormalization.js';
 
 type ApiRequest = IncomingMessage & { body?: unknown };
 type ApiResponse = ServerResponse & { status: (statusCode: number) => ApiResponse; json: (body: unknown) => void };
@@ -69,7 +75,7 @@ const callOpenAiCompatible = async (provider: 'groq' | 'cerebras', prompt: strin
   return response.json();
 };
 
-const buildPrompt = (input: { templateId: string; sourceType: ImportRequest['sourceType'] }) => `Return only JSON for a normalized resume object with keys: title, templateId, personalDetails, summary, careerObjective, skills, experience, internships, education, projects, certifications, achievements, languages, customSections, sectionOrder, sectionOrderMode, linkDisplayMode.
+const buildPrompt = (input: { templateId: string; sourceType: ImportRequest['sourceType'] }) => `Return only JSON for a normalized resume object with keys: title, templateId, personalDetails, summary, careerObjective, skills, experience, internships, education, projects, certifications, achievements, volunteering, languages, customSections, sectionOrder, sectionOrderMode, linkDisplayMode.
 Use only facts present in the source. No invented data. If uncertain, leave fields empty and rely on warnings instead. templateId=${input.templateId}. sourceType=${input.sourceType}.`;
 
 const parseJson = (value: unknown) => {
@@ -88,11 +94,32 @@ const asArray = <T,>(value: unknown): T[] => Array.isArray(value) ? value : [];
 const asObject = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value)
   ? value as Record<string, unknown>
   : {};
-const cleanArray = (value: unknown) => asArray<unknown>(value).map(item => typeof item === 'string' ? sanitizeText(item) : item).filter(Boolean);
+
+const normalizeRecordList = (value: unknown) =>
+  asArray<Record<string, unknown>>(value).map((item, index) => ({
+    id: sanitizeText(String(item.id || `${index + 1}`)),
+    title: sanitizeText(String(item.title || item.role || item.name || '')),
+    name: sanitizeText(String(item.name || item.title || '')),
+    company: sanitizeText(String(item.company || item.organization || '')),
+    institution: sanitizeText(String(item.institution || '')),
+    location: sanitizeText(String(item.location || '')),
+    startDate: sanitizeText(String(item.startDate || '')),
+    endDate: sanitizeText(String(item.endDate || '')),
+    description: sanitizeText(String(item.description || item.summary || '')),
+    technologies: sanitizeText(String(item.technologies || item.technologiesUsed || '')),
+    technologiesUsed: sanitizeText(String(item.technologiesUsed || item.technologies || '')),
+    issuer: sanitizeText(String(item.issuer || '')),
+    date: sanitizeText(String(item.date || '')),
+    url: sanitizeText(String(item.url || '')),
+    github: sanitizeText(String(item.github || '')),
+    live: sanitizeText(String(item.live || '')),
+    subtitle: sanitizeText(String(item.subtitle || '')),
+  })).filter(item => Object.values(item).some(Boolean));
 
 const normalizeImportResume = (value: unknown, templateId: string) => {
   const record = asObject(value);
   const personal = asObject(record.personalDetails);
+  const skills = asObject(record.skills);
   return {
     title: sanitizeText(String(record.title || 'Imported Resume')).slice(0, 100) || 'Imported Resume',
     templateId,
@@ -109,16 +136,63 @@ const normalizeImportResume = (value: unknown, templateId: string) => {
     },
     summary: sanitizeText(String(record.summary || '')),
     careerObjective: sanitizeText(String(record.careerObjective || '')),
-    skills: asObject(record.skills),
-    experience: asArray(record.experience),
-    internships: asArray(record.internships),
-    education: asArray(record.education),
-    projects: asArray(record.projects),
-    certifications: asArray(record.certifications),
-    achievements: cleanArray(record.achievements),
-    languages: cleanArray(record.languages),
+    skills: {
+      programmingLanguages: normalizeSkillList(skills.programmingLanguages || skills.languages),
+      frameworks: normalizeSkillList(skills.frameworks),
+      tools: normalizeSkillList(skills.tools),
+      databases: normalizeSkillList(skills.databases),
+      softSkills: normalizeSkillList(skills.softSkills),
+    },
+    experience: normalizeRecordList(record.experience),
+    internships: normalizeRecordList(record.internships).map(item => ({
+      id: item.id,
+      role: item.title,
+      company: item.company,
+      location: item.location,
+      startDate: item.startDate,
+      endDate: item.endDate,
+      description: item.description,
+      technologiesUsed: item.technologiesUsed,
+    })),
+    education: normalizeRecordList(record.education).map(item => ({
+      id: item.id,
+      degree: item.title,
+      institution: item.institution,
+      location: item.location,
+      startDate: item.startDate,
+      endDate: item.endDate,
+      description: item.description,
+      gpa: '',
+      scoreType: undefined,
+    })),
+    projects: normalizeRecordList(record.projects).map(item => ({
+      id: item.id,
+      name: item.name || item.title,
+      description: item.description,
+      technologies: item.technologies,
+      github: item.github,
+      live: item.live,
+    })),
+    certifications: normalizeRecordList(record.certifications).map(item => ({
+      id: item.id,
+      name: item.name || item.title,
+      issuer: item.issuer,
+      date: item.date,
+      url: item.url,
+    })),
+    achievements: normalizeBulletList(record.achievements),
+    volunteering: normalizeRecordList(record.volunteering).map(item => ({
+      id: item.id,
+      title: item.title,
+      company: item.company,
+      location: item.location,
+      startDate: item.startDate,
+      endDate: item.endDate,
+      description: item.description,
+    })),
+    languages: normalizeLanguageList(record.languages),
     customSections: asArray(record.customSections),
-    sectionOrder: cleanArray(record.sectionOrder),
+    sectionOrder: normalizeStringList(record.sectionOrder),
     sectionOrderMode: record.sectionOrderMode === 'template' ? 'template' : 'custom',
     linkDisplayMode: record.linkDisplayMode === 'raw' ? 'raw' : 'embedded',
   };
