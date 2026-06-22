@@ -35,6 +35,10 @@ service cloud.firestore {
       allow read, write: if isCurrentUser(userId);
     }
 
+    match /users/{userId}/{document=**} {
+      allow read, write: if isCurrentUser(userId);
+    }
+
     match /profiles/{userId} {
       allow read: if isCurrentUser(userId);
       allow create, update: if isCurrentUser(userId)
@@ -44,18 +48,48 @@ service cloud.firestore {
     }
 
     match /resumes/{resumeId} {
+      function resumeOwnedByCurrentUser(data) {
+        return (data.keys().hasAll(['ownerId']) && data.ownerId == request.auth.uid)
+          || (data.keys().hasAll(['userId']) && data.userId == request.auth.uid);
+      }
+
+      function resumeOwnersAreConsistent(data) {
+        return !data.keys().hasAll(['ownerId', 'userId'])
+          || data.ownerId == data.userId;
+      }
+
       allow create: if isSignedIn()
-        && hasValidResumeIdentity(request.resource.data, resumeId);
+        && request.resource.data.keys().hasAll(['id'])
+        && request.resource.data.keys().hasAny(['ownerId', 'userId'])
+        && request.resource.data.id == resumeId
+        && resumeOwnedByCurrentUser(request.resource.data)
+        && resumeOwnersAreConsistent(request.resource.data);
 
       allow read, delete: if isSignedIn()
-        && resource.data.keys().hasAll(['ownerId'])
-        && resource.data.ownerId == request.auth.uid;
+        && resource.data.keys().hasAny(['ownerId', 'userId'])
+        && resumeOwnedByCurrentUser(resource.data)
+        && resumeOwnersAreConsistent(resource.data);
 
       allow update: if isSignedIn()
-        && resource.data.keys().hasAll(['ownerId'])
-        && resource.data.ownerId == request.auth.uid
-        && hasValidResumeIdentity(request.resource.data, resumeId)
-        && request.resource.data.ownerId == resource.data.ownerId;
+        && resource.data.keys().hasAny(['ownerId', 'userId'])
+        && resumeOwnedByCurrentUser(resource.data)
+        && resumeOwnersAreConsistent(resource.data)
+        && request.resource.data.keys().hasAll(['id'])
+        && request.resource.data.keys().hasAny(['ownerId', 'userId'])
+        && request.resource.data.id == resumeId
+        && resumeOwnedByCurrentUser(request.resource.data)
+        && resumeOwnersAreConsistent(request.resource.data)
+        && (!resource.data.keys().hasAll(['ownerId'])
+          || request.resource.data.ownerId == resource.data.ownerId)
+        && (!resource.data.keys().hasAll(['userId'])
+          || request.resource.data.userId == resource.data.userId);
+    }
+
+    match /feedback/{feedbackId} {
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasAll(['userId', 'category', 'message', 'route', 'timestamp'])
+        && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if false;
     }
 
     match /atsReports/{reportId} {
@@ -64,6 +98,22 @@ service cloud.firestore {
       allow read, delete: if isSignedIn()
         && resource.data.userId == request.auth.uid;
       allow update: if false;
+    }
+
+    match /aiUsage/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /aiAbuse/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /aiSystem/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /system/{document=**} {
+      allow read, write: if false;
     }
 
     match /{document=**} {

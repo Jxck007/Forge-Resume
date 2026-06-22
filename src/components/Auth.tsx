@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { ArrowRight, Check, Eye, EyeOff, Loader2, Lock, Mail } from 'lucide-react';
 import {
@@ -13,9 +13,10 @@ import BrandLogo from './BrandLogo';
 
 interface AuthProps {
   onSuccess: () => void;
+  onContinueAsGuest: () => void;
 }
 
-export default function Auth({ onSuccess }: AuthProps) {
+export default function Auth({ onSuccess, onContinueAsGuest }: AuthProps) {
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -24,6 +25,7 @@ export default function Auth({ onSuccess }: AuthProps) {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [pendingGoogleLink, setPendingGoogleLink] = useState(false);
   const [loading, setLoading] = useState(false);
+  const authInProgressRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [errorAction, setErrorAction] = useState<'create' | 'google' | 'login' | 'reset' | null>(null);
@@ -35,6 +37,8 @@ export default function Auth({ onSuccess }: AuthProps) {
   };
 
   const handleGoogleSignIn = async () => {
+    if (authInProgressRef.current) return;
+    authInProgressRef.current = true;
     setLoading(true);
     setPendingGoogleLink(false);
     clearMessages();
@@ -56,8 +60,14 @@ export default function Auth({ onSuccess }: AuthProps) {
       }
       setError(error instanceof Error ? error.message : 'Google sign-in failed. Please try again.');
     } finally {
+      authInProgressRef.current = false;
       setLoading(false);
     }
+  };
+
+  const handleContinueAsGuest = () => {
+    if (authInProgressRef.current || loading) return;
+    onContinueAsGuest();
   };
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -112,13 +122,13 @@ export default function Auth({ onSuccess }: AuthProps) {
         <div className="forge-auth-story-inner">
           <BrandLogo />
           <div className="forge-auth-kicker">Built for the job search</div>
-          <h1>Build a resume that clears ATS filters and earns interviews.</h1>
+          <h1>Build a resume that looks professional and gets you interview-ready.</h1>
           <p>
             Create focused, professional resumes with an editor designed around how recruiters
             review technical candidates.
           </p>
           <div className="forge-auth-benefits">
-            {['ATS-first structure', 'Professional templates', 'Consistent PDF export'].map(item => (
+            {['Clear structure', 'Professional templates', 'Consistent PDF export'].map(item => (
               <span key={item}><Check />{item}</span>
             ))}
           </div>
@@ -146,8 +156,8 @@ export default function Auth({ onSuccess }: AuthProps) {
               </div>
             </div>
             <div className="forge-mockup-score">
-              <strong>92</strong>
-              <span>ATS ready</span>
+              <strong>PDF</strong>
+              <span>Export ready</span>
             </div>
           </div>
         </div>
@@ -170,13 +180,13 @@ export default function Auth({ onSuccess }: AuthProps) {
                 ? 'Set up your career workspace in less than a minute.'
                 : mode === 'forgot'
                 ? 'We will send a secure reset link to your inbox.'
-                : 'Sign in to access your resumes and ATS reports.'}
+                : 'Sign in to access your resumes and workspace.'}
             </p>
           </div>
 
           <AnimatePresence mode="popLayout">
             {error && (
-              <motion.div className="forge-alert is-error" role="alert" aria-live="assertive">
+              <motion.div id="auth-form-error" className="forge-alert is-error" role="alert" aria-live="assertive">
                 <span>{error}</span>
                 {errorAction && (
                   <button
@@ -202,13 +212,15 @@ export default function Auth({ onSuccess }: AuthProps) {
             {message && <motion.div className="forge-alert is-success" role="status" aria-live="polite">{message}</motion.div>}
           </AnimatePresence>
 
-          <form onSubmit={handleSubmit} className="forge-auth-form">
+          <form onSubmit={handleSubmit} className="forge-auth-form" noValidate>
             <label>
               <span>Email address</span>
               <div>
                 <Mail />
                 <input
                   type="email"
+                  aria-invalid={Boolean(error)}
+                  aria-describedby={error ? 'auth-form-error' : undefined}
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   placeholder="you@gmail.com"
@@ -286,8 +298,29 @@ export default function Auth({ onSuccess }: AuthProps) {
             </button>
           </form>
 
+          <div className="mt-5 border-t border-white/5 pt-5">
+            <div className="mb-4 rounded-xl border border-[#2A2E37] bg-[#0F1115] p-4 text-left">
+              <p className="text-sm font-semibold text-white">Just want to build?</p>
+              <p className="mt-1 text-xs leading-relaxed text-zinc-400">
+                Continue as Guest to create, edit, preview, and export a resume without signing in.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleContinueAsGuest}
+              disabled={loading}
+              className="w-full rounded-xl border border-[#2A2E37] bg-[#0F1115] px-4 py-2.5 text-sm font-semibold text-zinc-300 transition hover:border-zinc-600 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+              aria-label="Continue in guest mode"
+            >
+              {loading ? 'Finishing sign in…' : 'Continue as guest'}
+            </button>
+            <p className="mt-2 text-center text-xs text-zinc-500">
+              You&apos;re using Forge as Guest. Your work is saved locally on this device and is never auto-imported into an account.
+            </p>
+          </div>
+
           <div className="forge-auth-divider"><span>or</span></div>
-          <button type="button" className="forge-google-button" onClick={handleGoogleSignIn} disabled={loading}>
+          <button type="button" className="forge-google-button" onClick={handleGoogleSignIn} disabled={loading} aria-label={mode === 'register' ? 'Create account with Google' : 'Sign in with Google'}>
             <span>G</span> {mode === 'register' ? 'Create account with Google' : 'Sign in with Google'}
           </button>
           <p className="forge-google-help">

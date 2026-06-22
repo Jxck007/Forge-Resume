@@ -23,7 +23,7 @@ export function EducationBlock({
 
   return (
     <View style={styles.entry} wrap minPresenceAhead={pagination.entry}>
-      <View style={styles.entryTop} wrap={false}>
+      <View style={styles.entryTop}>
         <Text style={styles.entryTitle}>{education.degree}</Text>
         {education.date ? <Text style={styles.date}>{education.date}</Text> : null}
       </View>

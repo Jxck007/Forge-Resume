@@ -5,192 +5,88 @@ import {
   Bot,
   CheckCircle2,
   ChevronRight,
+  Compass,
   ExternalLink,
   FileText,
   Github,
   HelpCircle,
-  KeyRound,
   Loader2,
   Save,
   ShieldCheck,
-  Trash2,
   UserCircle2,
 } from 'lucide-react';
-import { getUserSettings, removeUserProviderKey, saveUserSettings } from '../services/firebase';
-import { testAIConnection } from '../services/ai';
-import { UserSettings } from '../types';
+import { getUserSettings, saveUserSettings } from '../services/firebase';
+import { TemplateId, UserSettings } from '../types';
+import { readStorageValue, storageKeys, writeStorageValue } from '../utils/storageKeys';
+import { TEMPLATE_IDS, TEMPLATE_LABELS } from './TemplateShowcase';
+import GuidedSpotlightTour, { GuidedTourStep } from './GuidedSpotlightTour';
+import AiAssistPanel from './ai/AiAssistPanel';
 
 interface SettingsProps {
   user: User;
   showToasts: (msg: string, type: 'success' | 'error' | 'info') => void;
   onKeyConfigured: () => void;
-  onNavigate: (tab: 'dashboard' | 'ats' | 'profile') => void;
+  onNavigate: (tab: 'dashboard' | 'profile') => void;
+  initialTab?: 'resume' | 'ai';
+  tourRequestId?: number;
 }
 
-type SettingsTab = 'ai' | 'resume' | 'account' | 'help';
-type Provider = UserSettings['aiProvider'];
+type SettingsTab = 'resume' | 'ai' | 'account' | 'help';
 
-const PROVIDERS: Record<Provider, {
-  description: string;
-  keyField: keyof UserSettings;
-  models: { id: string; label: string; note: string }[];
-  guideUrl: string;
-  guideSteps: string[];
-}> = {
-  Groq: {
-    description: 'Fast, low-latency resume assistance.',
-    keyField: 'groqApiKey',
-    models: [
-      { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B', note: 'Best quality for writing and structured imports.' },
-      { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant', note: 'Faster and lower-cost for quick edits.' },
-    ],
-    guideUrl: 'https://console.groq.com/keys',
-    guideSteps: ['Open Groq Console.', 'Create an API key.', 'Paste it here and test the connection.'],
-  },
-  Gemini: {
-    description: 'Google models for writing and extraction.',
-    keyField: 'geminiApiKey',
-    models: [
-      { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', note: 'Balanced speed and quality for resume tasks.' },
-      { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite', note: 'Lower-latency option for short edits.' },
-    ],
-    guideUrl: 'https://aistudio.google.com/app/apikey',
-    guideSteps: ['Open Google AI Studio.', 'Create an API key for your project.', 'Paste it here and test the connection.'],
-  },
-  OpenAI: {
-    description: 'OpenAI models for editing and analysis.',
-    keyField: 'openaiApiKey',
-    models: [
-      { id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini', note: 'Strong instruction following and structured output.' },
-      { id: 'gpt-4o-mini', label: 'GPT-4o Mini', note: 'Reliable, economical resume editing.' },
-    ],
-    guideUrl: 'https://platform.openai.com/api-keys',
-    guideSteps: ['Open the OpenAI API key page.', 'Create a secret key.', 'Paste it here and test the connection.'],
-  },
-  OpenRouter: {
-    description: 'Use multiple model providers through one key.',
-    keyField: 'openRouterApiKey',
-    models: [
-      { id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini via OpenRouter', note: 'Economical general-purpose option.' },
-      { id: 'anthropic/claude-3.5-haiku', label: 'Claude 3.5 Haiku', note: 'Fast writing and concise revisions.' },
-    ],
-    guideUrl: 'https://openrouter.ai/keys',
-    guideSteps: ['Open OpenRouter Keys.', 'Create a key and add provider credit if required.', 'Paste it here and test the connection.'],
-  },
-};
-
-export default function Settings({ user, showToasts, onKeyConfigured, onNavigate }: SettingsProps) {
+export default function Settings({ user, showToasts, onKeyConfigured, onNavigate, initialTab = 'resume', tourRequestId = 0 }: SettingsProps) {
   const [settings, setSettings] = useState<UserSettings | null>(null);
-  const [activeTab, setActiveTab] = useState<SettingsTab>('ai');
-  const [provider, setProvider] = useState<Provider>('Groq');
-  const [apiKeys, setApiKeys] = useState<Partial<Record<Provider, string>>>({});
-  const [providerModels, setProviderModels] = useState<Partial<Record<Provider, string>>>({});
-  const [defaultTemplate, setDefaultTemplate] = useState('modern');
-  const [defaultExportFormat, setDefaultExportFormat] = useState('PDF');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  const [defaultTemplate, setDefaultTemplate] = useState<TemplateId>('modern');
+  const [defaultExportFormat, setDefaultExportFormat] = useState<'PDF' | 'json'>('PDF');
+  const [defaultLinkDisplayMode, setDefaultLinkDisplayMode] = useState<'embedded' | 'raw'>('embedded');
+  const [defaultSectionOrderMode, setDefaultSectionOrderMode] = useState<'template' | 'custom'>('template');
+  const [defaultUseProfilePhoto, setDefaultUseProfilePhoto] = useState(true);
+  const [tourOpen, setTourOpen] = useState(() => readStorageValue(storageKeys.user.settingsTutorialCompleted(user.uid)) !== 'true');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState<Provider | null>(null);
 
   useEffect(() => {
     getUserSettings(user.uid)
       .then(data => {
         if (!data) return;
         setSettings(data);
-        const savedProvider = data.aiProvider || 'Groq';
-        setProvider(savedProvider);
-        setProviderModels({
-          ...data.providerModels,
-          [savedProvider]: data.modelId || data.providerModels?.[savedProvider] || PROVIDERS[savedProvider].models[0].id,
-        });
         setDefaultTemplate(data.defaultTemplate || 'modern');
         setDefaultExportFormat(data.defaultExportFormat || 'PDF');
+        setDefaultLinkDisplayMode(data.defaultLinkDisplayMode || 'embedded');
+        setDefaultSectionOrderMode(data.defaultSectionOrderMode || 'template');
+        setDefaultUseProfilePhoto(data.defaultUseProfilePhoto !== false);
       })
       .catch(() => showToasts('Could not load settings.', 'error'))
       .finally(() => setLoading(false));
   }, [user.uid]);
 
-  const storedKey = (target: Provider) => {
-    const field = PROVIDERS[target].keyField;
-    return (settings?.[field] as string | undefined) || '';
-  };
-  const selectedModel = providerModels[provider] || PROVIDERS[provider].models[0].id;
+  useEffect(() => {
+    if (!tourRequestId) return;
+    setActiveTab('resume');
+    setTourOpen(true);
+  }, [tourRequestId]);
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
       const payload: Partial<UserSettings> = {
-        aiProvider: provider,
-        modelId: selectedModel,
-        providerModels: {
-          ...(settings?.providerModels || {}),
-          ...providerModels,
-          [provider]: selectedModel,
-        },
-        temperature: settings?.temperature ?? 0.4,
         defaultTemplate,
         defaultExportFormat,
+        defaultLinkDisplayMode,
+        defaultSectionOrderMode,
+        defaultUseProfilePhoto,
       };
-
-      (Object.keys(PROVIDERS) as Provider[]).forEach(item => {
-        const nextKey = apiKeys[item]?.trim();
-        if (nextKey) payload[PROVIDERS[item].keyField] = nextKey as never;
-      });
 
       await saveUserSettings(user.uid, payload);
       setSettings(current => ({ ...(current || {}), ...payload } as UserSettings));
-      setApiKeys({});
       onKeyConfigured();
       showToasts('Settings saved.', 'success');
     } catch {
       showToasts('Settings could not be saved.', 'error');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleTest = async (target: Provider) => {
-    const key = apiKeys[target]?.trim() || storedKey(target);
-    if (!key) {
-      showToasts(`Add a ${target} API key first.`, 'info');
-      return;
-    }
-
-    setTesting(target);
-    try {
-      const testSettings = {
-        ...(settings || {}),
-        uid: user.uid,
-        email: user.email || '',
-        aiProvider: target,
-        modelId: providerModels[target] || PROVIDERS[target].models[0].id,
-        [PROVIDERS[target].keyField]: key,
-      } as UserSettings;
-      await testAIConnection(testSettings);
-      showToasts(`${target} is connected and the selected model responded.`, 'success');
-    } catch {
-      showToasts(`${target} could not connect. Check the key, model access, and provider billing.`, 'error');
-    } finally {
-      setTesting(null);
-    }
-  };
-
-  const handleRemoveKey = async (target: Provider) => {
-    if (!storedKey(target)) return;
-    setSaving(true);
-    try {
-      const keyField = PROVIDERS[target].keyField as 'groqApiKey' | 'geminiApiKey' | 'openaiApiKey' | 'openRouterApiKey';
-      await removeUserProviderKey(user.uid, keyField);
-      setSettings(current => {
-        if (!current) return current;
-        const next = { ...current };
-        delete next[keyField];
-        return next;
-      });
-      setApiKeys(current => ({ ...current, [target]: '' }));
-      onKeyConfigured();
-      showToasts(`${target} API key removed.`, 'success');
-    } catch {
-      showToasts(`Could not remove the ${target} API key.`, 'error');
     } finally {
       setSaving(false);
     }
@@ -206,33 +102,43 @@ export default function Settings({ user, showToasts, onKeyConfigured, onNavigate
   }
 
   const tabs = [
-    { id: 'ai' as const, label: 'AI Providers', icon: Bot },
     { id: 'resume' as const, label: 'Resume Preferences', icon: FileText },
+    { id: 'ai' as const, label: 'AI Assist Beta', icon: Bot },
     { id: 'account' as const, label: 'Account', icon: UserCircle2 },
     { id: 'help' as const, label: 'Help & Guides', icon: HelpCircle },
   ];
-  const activeProvider = PROVIDERS[provider];
-  const activeProviderConfigured = Boolean(storedKey(provider));
+  const tourTabs: SettingsTab[] = ['resume', 'ai', 'account', 'help'];
+  const tourSteps: GuidedTourStep[] = [
+    { target: '[data-tour="settings-resume"]', title: 'Resume defaults', copy: 'Set defaults for new resumes without changing existing documents.', icon: FileText },
+    { target: '[data-tour="settings-ai"]', title: 'AI Assist Beta', copy: 'Connect a session-only BYOK key here. Forge forgets it on refresh, logout, or tab close.', icon: Bot },
+    { target: '[data-tour="settings-account"]', title: 'Account and profile', copy: 'Review your identity and open the reusable profile.', icon: UserCircle2 },
+    { target: '[data-tour="settings-help"]', title: 'Help and shortcuts', copy: 'Find export checks and shortcuts back to your workspace.', icon: HelpCircle },
+  ];
+  const closeTour = () => {
+    writeStorageValue(storageKeys.user.settingsTutorialCompleted(user.uid), 'true');
+    setTourOpen(false);
+  };
   const signInProvider = user.providerData[0]?.providerId === 'google.com' ? 'Google' : 'Email and password';
 
   return (
     <div className="forge-page forge-settings">
-      <div className="forge-page-heading">
-        <span>Workspace preferences</span>
-        <h1>Settings</h1>
-        <p>Keep your resume workflow simple, consistent, and ready to export.</p>
+      <div className="forge-page-heading flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div><span>Workspace preferences</span><h1>Settings</h1><p>Control sensible defaults without changing existing resumes.</p></div>
+        <button type="button" className="forge-secondary-button" onClick={() => { setActiveTab('resume'); setTourOpen(true); }}><Compass /> Settings tour</button>
       </div>
 
-      <div className="forge-settings-layout">
-        <aside className="forge-settings-nav">
+      <div className="forge-settings-layout grid grid-cols-1 gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
+        <aside className="forge-settings-nav min-w-0 overflow-x-auto" aria-label="Settings sections">
           {tabs.map(tab => {
             const Icon = tab.icon;
             return (
               <button
                 key={tab.id}
                 type="button"
+                data-tour={`settings-${tab.id}`}
                 onClick={() => setActiveTab(tab.id)}
                 className={activeTab === tab.id ? 'is-active' : ''}
+                aria-label={`Open ${tab.label}`}
               >
                 <Icon />
                 {tab.label}
@@ -245,111 +151,7 @@ export default function Settings({ user, showToasts, onKeyConfigured, onNavigate
           </button>
         </aside>
 
-        <section className="forge-settings-panel">
-          {activeTab === 'ai' && (
-            <div className="forge-settings-section">
-              <div>
-                <h2>AI providers</h2>
-                <p>Select one provider for resume writing, importing, and ATS assistance.</p>
-              </div>
-
-              <div className="forge-provider-picker" role="group" aria-label="Choose AI provider">
-                {(Object.keys(PROVIDERS) as Provider[]).map(item => (
-                  <button
-                    key={item}
-                    type="button"
-                    className={provider === item ? 'is-selected' : ''}
-                    onClick={() => setProvider(item)}
-                    aria-pressed={provider === item}
-                  >
-                    <span>{item}</span>
-                    <small>{storedKey(item) ? 'Connected' : 'Set up'}</small>
-                  </button>
-                ))}
-              </div>
-
-              <article className="forge-provider-card is-selected">
-                <div className="forge-provider-heading">
-                  <div>
-                    <span className="forge-card-eyebrow">Selected provider</span>
-                    <strong>{provider}</strong>
-                    <p>{activeProvider.description}</p>
-                  </div>
-                  <span className={activeProviderConfigured ? 'is-ready' : ''}>
-                    <CheckCircle2 /> {activeProviderConfigured ? 'Connected' : 'Setup required'}
-                  </span>
-                </div>
-
-                <div className="forge-provider-steps">
-                  {activeProvider.guideSteps.map((step, index) => (
-                    <div key={step}><span>{index + 1}</span><p>{step}</p></div>
-                  ))}
-                </div>
-
-                <div className="forge-settings-grid forge-provider-controls">
-                  <label className="forge-field">
-                    <span>Selected provider</span>
-                    <select value={provider} onChange={event => setProvider(event.target.value as Provider)}>
-                      {(Object.keys(PROVIDERS) as Provider[]).map(item => <option key={item}>{item}</option>)}
-                    </select>
-                    <small>Changing provider does not remove saved keys.</small>
-                  </label>
-                  <label className="forge-field">
-                    <span>Model</span>
-                    <select
-                      value={selectedModel}
-                      onChange={event => setProviderModels(current => ({ ...current, [provider]: event.target.value }))}
-                    >
-                      {activeProvider.models.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}
-                    </select>
-                    <small>{activeProvider.models.find(model => model.id === selectedModel)?.note}</small>
-                  </label>
-                </div>
-
-                <div className="forge-key-row">
-                  <label className="forge-field forge-key-field">
-                    <span>{activeProviderConfigured ? 'Update API key' : 'API key'}</span>
-                    <div className="forge-key-input">
-                      <input
-                        aria-label={`${provider} API key`}
-                        type="password"
-                        value={apiKeys[provider] || ''}
-                        onChange={event => setApiKeys(current => ({ ...current, [provider]: event.target.value }))}
-                        placeholder={activeProviderConfigured ? 'Enter a new key to replace the saved key' : `Paste your ${provider} API key`}
-                        autoComplete="off"
-                      />
-                    </div>
-                    <small>{activeProviderConfigured ? 'The saved key remains hidden until you replace or remove it.' : 'The full key is never shown again after saving.'}</small>
-                  </label>
-                  <button type="button" className="forge-secondary-button" onClick={() => handleTest(provider)} disabled={testing === provider}>
-                    {testing === provider ? <Loader2 className="animate-spin" /> : 'Test connection'}
-                  </button>
-                </div>
-
-                <div className="forge-card-actions">
-                  <a className="forge-secondary-button" href={activeProvider.guideUrl} target="_blank" rel="noreferrer">
-                    <KeyRound /> How to get API key <ExternalLink />
-                  </a>
-                  {activeProviderConfigured && (
-                    <button type="button" className="forge-danger-button" onClick={() => handleRemoveKey(provider)} disabled={saving}>
-                      <Trash2 /> Remove saved key
-                    </button>
-                  )}
-                </div>
-
-                <div className="forge-key-trust">
-                  <ShieldCheck />
-                  <div>
-                    <strong>Your key stays private</strong>
-                    <p>
-                      Saved keys live in your private authenticated Firebase user settings, never in public source code or Git. Forge Resume never displays or logs a saved key. Requests go from your browser directly to the provider you select and are not routed through a Forge Resume application server.
-                    </p>
-                  </div>
-                </div>
-              </article>
-            </div>
-          )}
-
+        <section className="forge-settings-panel min-w-0">
           {activeTab === 'resume' && (
             <div className="forge-settings-section">
               <div>
@@ -360,31 +162,50 @@ export default function Settings({ user, showToasts, onKeyConfigured, onNavigate
                 <div className="forge-settings-grid">
                   <label className="forge-field">
                     <span>Default template</span>
-                    <select value={defaultTemplate} onChange={event => setDefaultTemplate(event.target.value)}>
-                      <option value="modern">Modern Professional</option>
-                      <option value="minimal">Minimal</option>
-                      <option value="corporate">Corporate</option>
-                      <option value="atsFriendly">ATS Friendly</option>
-                      <option value="softwareEngineer">Software Engineer</option>
-                      <option value="classic">Classic</option>
+                    <select value={defaultTemplate} onChange={event => setDefaultTemplate(event.target.value as TemplateId)}>
+                      {TEMPLATE_IDS.map(templateId => <option key={templateId} value={templateId}>{TEMPLATE_LABELS[templateId]}</option>)}
                     </select>
                     <small>Applied when you start a new resume.</small>
                   </label>
                   <label className="forge-field">
                     <span>Default export</span>
-                    <select value={defaultExportFormat} onChange={event => setDefaultExportFormat(event.target.value)}>
+                    <select value={defaultExportFormat} onChange={event => setDefaultExportFormat(event.target.value as 'PDF' | 'json')}>
                       <option value="PDF">PDF document</option>
                       <option value="json">JSON data backup</option>
                     </select>
                     <small>You can choose another format during export.</small>
                   </label>
+                  <label className="forge-field">
+                    <span>Default link style</span>
+                    <select value={defaultLinkDisplayMode} onChange={event => setDefaultLinkDisplayMode(event.target.value as 'embedded' | 'raw')}><option value="embedded">Embedded labels</option><option value="raw">Raw URLs</option></select>
+                    <small>Controls how links appear in new resumes.</small>
+                  </label>
+                  <label className="forge-field">
+                    <span>Default section order</span>
+                    <select value={defaultSectionOrderMode} onChange={event => setDefaultSectionOrderMode(event.target.value as 'template' | 'custom')}><option value="template">Follow template</option><option value="custom">Custom editor order</option></select>
+                    <small>Template order is the safest default.</small>
+                  </label>
                 </div>
+                <label className="mt-4 flex items-center justify-between gap-4 rounded-xl border border-[#2A2E37] bg-[#0F1115] p-4 text-sm text-zinc-300">
+                  <span><strong className="block text-white">Use profile photo by default</strong><small className="mt-1 block text-zinc-500">Photo-safe templates may display it; text-first templates can still hide it.</small></span>
+                  <input type="checkbox" checked={defaultUseProfilePhoto} onChange={event => setDefaultUseProfilePhoto(event.target.checked)} className="h-5 w-5 accent-emerald-400" />
+                </label>
                 <div className="forge-card-divider" />
                 <div className="forge-inline-detail">
                   <FileText />
-                  <div><strong>ATS-ready output</strong><p>Resume text stays selectable, structured, and readable in exported PDFs.</p></div>
+                  <div><strong>Clean PDF output</strong><p>Resume text stays selectable, structured, and readable in exported PDFs.</p></div>
                 </div>
               </article>
+            </div>
+          )}
+
+          {activeTab === 'ai' && (
+            <div className="forge-settings-section">
+              <div>
+                <h2>AI Assist Beta</h2>
+                <p>Connect your own provider key for this browser session only. Forge does not save provider keys to your account.</p>
+              </div>
+              <AiAssistPanel showToasts={showToasts} />
             </div>
           )}
 
@@ -421,14 +242,13 @@ export default function Settings({ user, showToasts, onKeyConfigured, onNavigate
               </div>
               <div className="forge-guide-list">
                 {[
-                  ['Build an ATS-ready resume', 'Use standard sections, measurable impact, and role-specific keywords.', 'dashboard', 'Open resumes'],
-                  ['Tailor for a job description', 'Compare your resume with the role and close meaningful keyword gaps.', 'ats', 'Open ATS analyzer'],
+                  ['Build a polished resume', 'Use clear sections, measurable impact, and concise writing.', 'dashboard', 'Open resumes'],
                   ['Keep reusable details current', 'Maintain one complete profile to speed up every new resume.', 'profile', 'Update profile'],
                 ].map(([title, copy, target, action]) => (
                   <article key={title}>
                     <BookOpen />
                     <div><strong>{title}</strong><p>{copy}</p></div>
-                    <button type="button" onClick={() => onNavigate(target as 'dashboard' | 'ats' | 'profile')}>
+                    <button type="button" onClick={() => onNavigate(target as 'dashboard' | 'profile')}>
                       {action} <ChevronRight />
                     </button>
                   </article>
@@ -442,7 +262,7 @@ export default function Settings({ user, showToasts, onKeyConfigured, onNavigate
                 <Github />
                 <div>
                   <strong>Built by Jegadeesh</strong>
-                  <p>Forge Resume is an independent ATS-focused resume platform.</p>
+                  <p>Forge Resume is an independent resume workspace focused on clean, reliable output.</p>
                   <div className="forge-creator-links">
                     <a href="https://github.com/Jxck007/portfolio" target="_blank" rel="noreferrer">
                       Portfolio <ExternalLink />
@@ -457,6 +277,7 @@ export default function Settings({ user, showToasts, onKeyConfigured, onNavigate
           )}
         </section>
       </div>
+      {tourOpen && <GuidedSpotlightTour label="Settings guide" steps={tourSteps} onComplete={closeTour} onStepChange={index => setActiveTab(tourTabs[index])} />}
     </div>
   );
 }

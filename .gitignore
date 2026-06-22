@@ -11,3 +11,4 @@ coverage/
 .env.test
 .env.*.local
 !.env.example
+.ai/vendor/

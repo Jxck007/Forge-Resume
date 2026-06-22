@@ -1,0 +1,27 @@
+approval_policy = "on-request"
+
+instructions = """
+Use AGENTS.md first.
+
+Forge Resume priority:
+1. Data safety
+2. Normalized resume model
+3. PDF reliability
+4. ATS correctness
+5. Firebase Spark-safe persistence
+6. Mobile/tablet responsiveness
+
+Use skills only when relevant:
+- .ai/vendor/agent-skills
+- .ai/vendor/ui-ux-pro-max-skill
+- .ai/vendor/caveman
+- .ai/vendor/graphify
+
+Token rules:
+- Caveman mode for summaries: short output, no fluff.
+- Do not read whole repo unless needed.
+- Do not paste unchanged files.
+- Prefer file-by-file patches.
+- Store durable findings in .ai/memory.
+- Use Graphify only for architecture/repo mapping, not every small edit.
+"""

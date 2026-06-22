@@ -14,6 +14,7 @@ import {
 } from '../types';
 import { resolveResumeSectionOrder } from '../utils/sectionOrder';
 import { resolveSectionHeading } from '../utils/resolveSectionHeading';
+import { resolveLinkDisplayMode } from '../utils/linkDisplay';
 import {
   resumeAlignment,
   resumeSpacing,
@@ -575,7 +576,7 @@ const buildStyles = (
           ? Math.max(18, resumeTypography.name - compactLevel * 0.3)
           : resumeTypography.name
       ) * (profile.nameScale || 1),
-      lineHeight: 1.08,
+      lineHeight: 1.02,
       fontWeight: 700,
       fontFamily: profile.displayFontFamily || profile.fontFamily,
       letterSpacing: isEditorial ? 0.6 : -0.3,
@@ -589,7 +590,7 @@ const buildStyles = (
       marginTop: mode === 'single' ? 3 : 4,
       fontSize: resumeTypography.title,
       lineHeight: 1.2,
-      fontWeight: isEditorial ? 400 : 700,
+      fontWeight: isEditorial ? 400 : 600,
       fontFamily: profile.fontFamily,
       letterSpacing: isEditorial ? 0.5 : 0,
       color: profile.headerText || profile.accent,
@@ -599,18 +600,18 @@ const buildStyles = (
       flexDirection: 'row',
       flexWrap: 'wrap',
       justifyContent: profile.centeredHeader ? 'center' : 'flex-start',
-      gap: mode === 'single' ? 3 : 4,
+      gap: mode === 'single' ? 5 : 6,
       marginTop: (mode === 'single' ? Math.max(2, 4 - compactLevel * 0.5) : 5) * headerFactor,
       maxWidth: '100%',
     },
     contactItem: {
       fontSize: resumeTypography.metadata,
-      lineHeight: 1.18,
+      lineHeight: 1.15,
       color: profile.headerText || profile.muted,
     },
     contactSeparator: {
       fontSize: resumeTypography.metadata,
-      lineHeight: 1.18,
+      lineHeight: 1.15,
       color: profile.headerText || profile.muted,
     },
     inlineLinks: {
@@ -619,22 +620,22 @@ const buildStyles = (
       flexWrap: 'nowrap',
       flexShrink: 0,
       justifyContent: 'flex-end',
-      gap: mode === 'single' ? 3 : 4,
+      gap: mode === 'single' ? 5 : 6,
       maxWidth: '100%',
     },
     link: {
       color: profile.headerText || profile.accent,
       textDecoration: 'underline',
-      fontWeight: 700,
+      fontWeight: 600,
       fontSize: resumeTypography.metadata,
-      lineHeight: 1.18,
+      lineHeight: 1.15,
     },
     entryLink: {
       color: profile.accent,
       textDecoration: 'underline',
-      fontWeight: 700,
+      fontWeight: 600,
       fontSize: resumeTypography.metadata,
-      lineHeight: 1.18,
+      lineHeight: 1.15,
     },
     photo: {
       width: mode === 'single' ? Math.max(40, 50 - compactLevel * 3) : 58,
@@ -710,7 +711,8 @@ const buildStyles = (
       flexDirection: templatePlan.bodyLayout === 'sidebar' ? 'column' : 'row',
       justifyContent: 'space-between',
       alignItems: 'flex-start',
-      gap: templatePlan.bodyLayout === 'sidebar' ? 1 : 9,
+      flexWrap: 'wrap',
+      gap: templatePlan.bodyLayout === 'sidebar' ? 1 : 6,
     },
     entryTitle: {
       flexGrow: templatePlan.bodyLayout === 'sidebar' ? 0 : 1,
@@ -726,6 +728,7 @@ const buildStyles = (
       flexShrink: 0,
       maxWidth: '100%',
       alignSelf: templatePlan.bodyLayout === 'sidebar' ? 'flex-end' : 'auto',
+      marginLeft: templatePlan.bodyLayout === 'sidebar' ? 0 : 8,
       textAlign: 'right',
       color: profile.muted,
       fontSize: resumeTypography.date,
@@ -747,8 +750,9 @@ const buildStyles = (
       flexDirection: 'row',
       alignItems: 'flex-start',
       justifyContent: 'space-between',
-      gap: 8,
-      marginTop: 1,
+      gap: 4,
+      marginTop: 1.5,
+      flexWrap: 'wrap',
     },
     entryDetailMeta: {
       flexGrow: 1,
@@ -759,9 +763,69 @@ const buildStyles = (
       fontSize: resumeTypography.metadata,
       fontStyle: profile.entryLayout === 'editorial' ? 'italic' : 'normal',
     },
-    description: {
-      marginTop: entryCompact ? 1 : 2,
+    projectHeader: {
+      display: 'flex',
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      width: '100%',
+      gap: 6,
+    },
+    projectHeaderMeta: {
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'flex-end',
+      maxWidth: '42%',
+      flexShrink: 0,
+    },
+    projectLinks: {
+      display: 'flex',
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      justifyContent: 'flex-end',
+      flexWrap: 'wrap',
+      width: '100%',
+      marginTop: 1,
+    },
+    projectLinkItem: {
+      display: 'flex',
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      justifyContent: 'flex-end',
+      maxWidth: '100%',
+      marginLeft: 4,
+    },
+    projectLink: {
+      maxWidth: '100%',
+      flexShrink: 1,
+      color: profile.accent,
+      textDecoration: 'underline',
+      fontWeight: 600,
+      fontSize: resumeTypography.metadata,
+      lineHeight: 1.25,
+      textAlign: 'right',
+    },
+    projectTech: {
+      width: '100%',
+      marginTop: 2,
+      marginBottom: 0.5,
+      color: profile.muted,
+      fontSize: resumeTypography.metadata,
+      lineHeight: 1.3,
+      fontStyle: profile.entryLayout === 'editorial' ? 'italic' : 'normal',
+    },
+    projectDescription: {
+      width: '100%',
+      marginTop: entryCompact ? 1.5 : 2.5,
       color: profile.text,
+      fontSize: resumeTypography.body,
+      lineHeight: 1.28,
+    },
+    description: {
+      marginTop: entryCompact ? 1.5 : 2.5,
+      color: profile.text,
+      fontSize: resumeTypography.body,
+      lineHeight: 1.24,
     },
     skillRows: {
       marginTop: (
@@ -774,14 +838,15 @@ const buildStyles = (
       display: 'flex',
       flexDirection: 'row',
       marginTop: 2 * skillsFactor,
-      paddingBottom: (templatePlan.skills === 'rows' ? 1 : 0) * skillsFactor,
-      borderBottomWidth: templateId === 'atsFriendly' ? 0 : templatePlan.skills === 'rows' ? 0.25 : 0,
+      paddingBottom: (templatePlan.skills === 'rows' ? 0.6 : 0) * skillsFactor,
+      borderBottomWidth: 0,
       borderBottomColor: profile.border,
     },
     skillLabel: {
-      width: mode === 'single' ? 132 : 142,
+      width: mode === 'single' ? 108 : 116,
       fontWeight: 700,
       color: profile.text,
+      fontSize: resumeTypography.body,
     },
     skillValues: {
       flexGrow: 1,
@@ -790,6 +855,8 @@ const buildStyles = (
       minWidth: 0,
       color: profile.muted,
       fontWeight: 400,
+      fontSize: resumeTypography.body,
+      lineHeight: 1.22,
     },
     compactSkillGrid: {
       display: 'flex',
@@ -813,7 +880,7 @@ const buildStyles = (
       display: 'flex',
       flexDirection: 'row',
       marginTop: 2,
-      gap: 5,
+      gap: 4,
     },
     bullet: {
       color: profile.accent,
@@ -907,6 +974,11 @@ function ResumePdfDocument({
   const details = resume.personalDetails;
   const resolvedHeading = (sectionKey: StandardSectionKey, fallback?: string) =>
     resolveSectionHeading(sectionKey, resume.sectionConfig, fallback);
+  const resolvedLinkMode = (sectionKey: StandardSectionKey) =>
+    resolveLinkDisplayMode(
+      { linkDisplayMode: resume.linkDisplayMode, linkSettings: resume.linkSettings },
+      resume.sectionConfig[sectionKey]
+    );
 
   const hasSectionContent = (sectionId: string) => {
     if (hiddenSections.has(sectionId)) return false;
@@ -1041,7 +1113,7 @@ function ResumePdfDocument({
             <ProjectBlock
               key={project.id}
               project={project}
-              linkDisplayMode={resume.linkDisplayMode}
+              linkDisplayMode={resolvedLinkMode('projects')}
               styles={primitiveStyles}
               pagination={pagination}
               emphasized={plan.projectEmphasis === 'primary'}
@@ -1056,7 +1128,7 @@ function ResumePdfDocument({
             <CertificationBlock
               key={certification.id}
               certification={certification}
-              linkDisplayMode={resume.linkDisplayMode}
+              linkDisplayMode={resolvedLinkMode('certifications')}
               styles={primitiveStyles}
               pagination={pagination}
             />
@@ -1162,7 +1234,7 @@ function ResumePdfDocument({
       <Page size="A4" style={styles.page} wrap>
         <HeaderBlock
           details={details}
-          linkDisplayMode={resume.linkDisplayMode}
+          linkDisplayMode={resolvedLinkMode('summary')}
           photoSource={photoSource}
           usePhoto={usePhoto}
           styles={primitiveStyles}

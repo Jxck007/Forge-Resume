@@ -17,7 +17,7 @@ export function ExperienceBlock({
 }: ExperienceBlockProps) {
   return (
     <View style={styles.entry} wrap minPresenceAhead={pagination.entry}>
-      <View style={styles.entryTop} wrap={false}>
+      <View style={styles.entryTop}>
         <Text style={styles.entryTitle}>
           {[experience.role, experience.company].filter(Boolean).join(' - ')}
         </Text>

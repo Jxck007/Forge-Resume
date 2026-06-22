@@ -1,8 +1,9 @@
 import React from 'react';
 import { Link, Text, View } from '@react-pdf/renderer';
 import { ResumeProject } from '../../schema/resumeSchema';
-import { PaginationPolicy, ResumePrimitiveStyles, safePdfUrl } from './types';
-import { ResumeData } from '../../types';
+import { PaginationPolicy, ResumePrimitiveStyles } from './types';
+import { LinkDisplayMode, ResumeData } from '../../types';
+import { formatResumeLink, resolveLinkDisplayMode } from '../../utils/linkDisplay';
 
 interface ProjectBlockProps extends React.Attributes {
   key?: React.Key;
@@ -20,19 +21,10 @@ export function ProjectBlock({
   pagination,
   emphasized = false,
 }: ProjectBlockProps) {
+  const displayMode = resolveLinkDisplayMode({ linkDisplayMode });
   const links = [
-    project.links.github
-      ? {
-          label: linkDisplayMode === 'raw' ? safePdfUrl(project.links.github) : 'GitHub: Click here',
-          url: safePdfUrl(project.links.github),
-        }
-      : null,
-    project.links.demo
-      ? {
-          label: linkDisplayMode === 'raw' ? safePdfUrl(project.links.demo) : 'Live Demo: Click here',
-          url: safePdfUrl(project.links.demo),
-        }
-      : null,
+    formatResumeLink({ href: project.links.github, kind: 'project-github' }, displayMode),
+    formatResumeLink({ href: project.links.demo, kind: 'project-demo' }, displayMode),
   ].filter(Boolean) as Array<{ label: string; url: string }>;
 
   return (
@@ -41,30 +33,32 @@ export function ProjectBlock({
       wrap
       minPresenceAhead={pagination.entry}
     >
-      <View style={styles.entryTop} wrap={false}>
+      <View style={styles.projectHeader} wrap={false}>
         <Text style={styles.entryTitle}>{project.title}</Text>
-        {project.date ? <Text style={styles.date}>{project.date}</Text> : null}
+        {(project.date || links.length > 0) ? (
+          <View style={styles.projectHeaderMeta}>
+            {project.date ? <Text style={styles.date}>{project.date}</Text> : null}
+            {links.length > 0 ? (
+              <View style={styles.projectLinks}>
+                {links.map((link, index) => (
+                  <View key={`${link.url}-${index}`} style={styles.projectLinkItem} wrap={false}>
+                    {index > 0 ? <Text style={styles.contactSeparator}>{'\u2022 '}</Text> : null}
+                    <Link src={link.url} style={styles.projectLink}>{link.label}</Link>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
       </View>
-      {(project.tech.length > 0 || links.length > 0) ? (
-        <View style={styles.entryDetailRow} wrap={false}>
-          <Text style={styles.entryDetailMeta}>
-            {project.tech.length > 0 ? `Tech: ${project.tech.join(', ')}` : ''}
-          </Text>
-          {links.length > 0 ? (
-            <View style={styles.inlineLinks} wrap={false}>
-              {links.map((link, index) => (
-                <React.Fragment key={link.url}>
-                  {index > 0 ? <Text style={styles.contactSeparator}>{'\u2022'}</Text> : null}
-                  <Link src={link.url} style={styles.entryLink}>{link.label}</Link>
-                </React.Fragment>
-              ))}
-            </View>
-          ) : null}
-        </View>
+      {project.tech.length > 0 ? (
+        <Text style={styles.projectTech}>
+          {project.tech.join(' • ')}
+        </Text>
       ) : null}
       {project.description ? (
         <Text
-          style={styles.description}
+          style={styles.projectDescription}
           orphans={pagination.orphans}
           widows={pagination.widows}
         >

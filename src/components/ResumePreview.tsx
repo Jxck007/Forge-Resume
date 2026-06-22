@@ -8,12 +8,13 @@ import React, {
   useState,
 } from 'react';
 import { pdf } from '@react-pdf/renderer';
-import { AlertTriangle, Eye, FileDown, Loader2, Printer, X } from 'lucide-react';
+import { AlertTriangle, Braces, ChevronDown, Eye, FileDown, FileType2, Image, Loader2, X } from 'lucide-react';
 import { ResumeData, TemplateId } from '../types';
 import ResumePdfDocument, {
   FORCE_SINGLE_PAGE_PROFILE,
   SINGLE_PAGE_MAX_COMPACT_LEVEL,
 } from './ResumePdfDocument';
+import ActionMenu from './ActionMenu';
 
 interface ResumePreviewProps {
   resume: ResumeData;
@@ -46,7 +47,7 @@ const TEMPLATES: { id: TemplateId; name: string; description: string }[] = [
   { id: 'corporate', name: 'Corporate Standard', description: 'Carlito enterprise typography, full-width header, and formal section blocks.' },
   { id: 'executive', name: 'Executive Boardroom', description: 'Merriweather executive summary, leadership emphasis, and generous whitespace.' },
   { id: 'creative', name: 'Creative Dynamic', description: 'Expressive rail header, profile photo support, and portfolio project cards.' },
-  { id: 'atsFriendly', name: 'ATS Friendly', description: 'Dense single-column structure with minimal decoration.' },
+  { id: 'atsFriendly', name: 'Clean Single Column', description: 'Dense single-column structure with minimal decoration.' },
   { id: 'softwareEngineer', name: 'Software Developer', description: 'GitHub-inspired technology matrix with projects and stack first.' },
   { id: 'student', name: 'Academic Student', description: 'Merriweather and Inter combination with education-first ordering.' },
   { id: 'startup', name: 'Startup Growth', description: 'Compact achievement cards and projects-first ordering.' },
@@ -316,29 +317,6 @@ function ResumePreview({
   const hasPreview = Boolean(previewSlots[activePreviewSlot]);
   const singlePageBlocked = fitMode === 'single' && Boolean(fitResult && fitResult.pageCount > 1);
 
-  const handlePrint = async () => {
-    if (isExporting) return;
-    setIsExporting(true);
-    setExportError(null);
-    try {
-      const blob = await createPdfBlob();
-      const url = URL.createObjectURL(blob);
-      const printWindow = window.open(url, '_blank', 'noopener,noreferrer');
-      if (!printWindow) {
-        URL.revokeObjectURL(url);
-        throw new Error('Your browser blocked the print window. Allow pop-ups and try again.');
-      }
-      showToasts(`Opened the ${fitMode} A4 document for printing.`, 'success');
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Unable to open the PDF for printing.';
-      setExportError({ message });
-      showToasts(message, 'error');
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
   const handleDownloadPDF = async () => {
     if (isExporting) return;
     setExportError(null);
@@ -359,8 +337,8 @@ function ResumePreview({
       anchor.remove();
       URL.revokeObjectURL(url);
       showToasts('PDF downloaded successfully.', 'success');
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'PDF generation failed.';
+    } catch {
+      const message = 'Forge could not generate the PDF safely. Please try again.';
       setExportError({ message });
       showToasts(message, 'error');
     } finally {
@@ -369,7 +347,7 @@ function ResumePreview({
   };
 
   return (
-    <div className="forge-preview-workspace flex h-full min-w-0 flex-col overflow-hidden rounded-2xl border border-[#263241] bg-[#0B0F14] p-3 text-zinc-100 sm:p-4" id="resume-preview-panel">
+    <div className="forge-preview-workspace flex h-full min-w-0 flex-col overflow-hidden rounded-2xl border border-[#263241] bg-[#0B0F14] p-3 text-zinc-100 sm:p-4" id="resume-preview-panel" data-tour="builder-preview">
       <div className="no-print mb-3 flex min-w-0 flex-col gap-3 border-b border-[#263241] pb-3 sm:mb-4 sm:pb-4">
         {exportError && (
           <div className="rounded-xl border border-rose-400/40 bg-rose-950/40 p-3 text-rose-100">
@@ -378,9 +356,14 @@ function ResumePreview({
                 <AlertTriangle className="h-4 w-4" />
                 <span>PDF export failed</span>
               </div>
-              <button type="button" onClick={() => setExportError(null)} className="rounded-full p-1 transition hover:bg-rose-900/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300" aria-label="Dismiss PDF error">
-                <X className="h-4 w-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={handleDownloadPDF} disabled={isExporting || !hasPreview || singlePageBlocked} className="rounded-lg border border-rose-300/30 px-2.5 py-1 text-[11px] font-semibold text-rose-100 transition hover:bg-rose-900/60 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300">
+                  Retry PDF
+                </button>
+                <button type="button" onClick={() => setExportError(null)} className="rounded-full p-1 transition hover:bg-rose-900/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300" aria-label="Dismiss PDF error">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             </div>
             <p className="mt-2 text-xs">{exportError.message}</p>
           </div>
@@ -423,38 +406,45 @@ function ResumePreview({
             {fitResult && (
               <div className="flex flex-wrap justify-end gap-x-3 gap-y-1 text-[10px] font-semibold text-zinc-400">
                 <span>Estimated pages: {fitResult.pageCount}</span>
-                <span className="capitalize">{fitResult.fitCategory}</span>
-                <span className="capitalize">Overflow risk: {fitResult.overflowRisk}</span>
+                <span className="capitalize">Preview-based: {fitResult.fitCategory}</span>
+                <span className="capitalize">Estimated overflow risk: {fitResult.overflowRisk}</span>
               </div>
             )}
             {fitMode === 'single' && fitResult && fitResult.pageCount > 1 && (
               <div className="max-w-sm rounded-lg border border-amber-400/40 bg-amber-950/30 px-3 py-2 text-[11px] leading-4 text-amber-100">
-                This template cannot fit the current resume on one page. Select Multi Page or choose a template marked Single Page.
+                This preview estimate suggests the current resume may exceed one page. Select Multi Page or choose a template marked Single Page.
               </div>
             )}
 
             <div className="grid w-full grid-cols-2 gap-1 rounded-lg border border-[#2A3644] bg-[#111827] p-1 sm:w-auto">
               <button type="button" onClick={() => onProfilePhotoUsageChange(true)} disabled={!templateAllowsPhoto} aria-pressed={resume.useProfilePhoto !== false} className={`min-h-9 rounded-md px-2 py-1.5 text-[10px] font-bold uppercase tracking-wide transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#72DFCA] ${templateAllowsPhoto && resume.useProfilePhoto !== false ? 'bg-[#72DFCA] text-[#08110F]' : 'text-zinc-300 hover:bg-[#1B2532] disabled:cursor-not-allowed disabled:text-zinc-600'}`}>
-                {templateAllowsPhoto ? 'Use Photo' : 'ATS: No Photo'}
+                {templateAllowsPhoto ? 'Use Photo' : 'Photo hidden for this template'}
               </button>
               <button type="button" onClick={() => onProfilePhotoUsageChange(false)} disabled={!templateAllowsPhoto} aria-pressed={resume.useProfilePhoto === false} className={`min-h-9 rounded-md px-2 py-1.5 text-[10px] font-bold uppercase tracking-wide transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#72DFCA] ${templateAllowsPhoto && resume.useProfilePhoto === false ? 'bg-[#72DFCA] text-[#08110F]' : 'text-zinc-300 hover:bg-[#1B2532] disabled:cursor-not-allowed disabled:text-zinc-600'}`}>
                 No Photo
               </button>
             </div>
             <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end">
-              <button type="button" onClick={handleDownloadPDF} disabled={isExporting || !hasPreview || singlePageBlocked} className="flex min-h-10 items-center justify-center gap-1.5 rounded-lg bg-[#72DFCA] px-3 py-2 text-xs font-bold text-[#08110F] transition hover:bg-[#91E8D7] disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B5F5E8]">
+              <button type="button" data-tour="download-pdf" onClick={handleDownloadPDF} disabled={isExporting || !hasPreview || singlePageBlocked} className="flex min-h-10 items-center justify-center gap-1.5 rounded-lg bg-[#72DFCA] px-3 py-2 text-xs font-bold text-[#08110F] transition hover:bg-[#91E8D7] disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B5F5E8]">
                 {isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}
-                <span>{isExporting ? 'Generating...' : 'Download PDF'}</span>
+                <span>{isExporting ? 'Generating...' : 'Export PDF'}</span>
               </button>
-              <button type="button" onClick={handlePrint} disabled={isExporting || !hasPreview || singlePageBlocked} className="flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-[#344354] bg-[#111827] px-3 py-2 text-xs font-bold text-zinc-100 transition hover:border-[#526579] hover:bg-[#182231] disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#72DFCA]">
-                <Printer className="h-3.5 w-3.5" />
-                <span>Print</span>
-              </button>
+              <ActionMenu
+                triggerLabel="Open export options"
+                triggerClassName="flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-[#344354] bg-[#111827] px-3 py-2 text-xs font-bold text-zinc-100 transition hover:border-[#526579] hover:bg-[#182231] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#72DFCA]"
+                triggerContent={<><span>More exports</span><ChevronDown className="h-3.5 w-3.5" /></>}
+                items={[
+                  { label: 'PDF', icon: <FileDown className="h-4 w-4" />, onSelect: handleDownloadPDF, disabled: isExporting || !hasPreview || singlePageBlocked },
+                  { label: 'DOCX — Coming soon', icon: <FileType2 className="h-4 w-4" />, onSelect: () => {}, disabled: true },
+                  { label: 'PNG — Coming soon', icon: <Image className="h-4 w-4" />, onSelect: () => {}, disabled: true },
+                  { label: 'JSON — Coming soon', icon: <Braces className="h-4 w-4" />, onSelect: () => {}, disabled: true },
+                ]}
+              />
             </div>
           </div>
         </div>
 
-        <div className="grid min-w-0 grid-cols-2 gap-1.5 xs:grid-cols-3 sm:grid-cols-4 lg:grid-cols-6">
+        <div className="grid min-w-0 grid-cols-1 gap-1.5 xs:grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6" data-tour="template-controls">
           {orderedTemplates.map(template => {
             const recommended = semanticRecommendationIds.includes(template.id);
             const pageExpectation = templatePageExpectations[template.id] || 'checking';
@@ -468,7 +458,7 @@ function ResumePreview({
                 if (template.id === selectedTemplate) return;
                 onTemplateChange(template.id);
                 showToasts(`Switched to ${template.name}.`, 'info');
-              }} aria-pressed={selectedTemplate === template.id} className={`min-h-16 min-w-0 rounded-lg border px-2 py-2 text-[10px] font-bold leading-tight transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#72DFCA] ${selectedTemplate === template.id ? 'border-[#72DFCA] bg-[#15332F] text-[#B5F5E8]' : 'border-[#293544] bg-[#111827] text-zinc-300 hover:border-[#4A5B6E] hover:bg-[#182231] hover:text-white'}`} title={`${template.description} ${recommended ? 'Recommended for this resume.' : 'General template option.'} Expected behavior: ${pageLabel}.`}>
+              }} aria-pressed={selectedTemplate === template.id} aria-label={`Switch template to ${template.name}. ${pageLabel}.`} className={`min-h-16 min-w-0 rounded-lg border px-2 py-2 text-[10px] font-bold leading-tight transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#72DFCA] ${selectedTemplate === template.id ? 'border-[#72DFCA] bg-[#15332F] text-[#B5F5E8]' : 'border-[#293544] bg-[#111827] text-zinc-300 hover:border-[#4A5B6E] hover:bg-[#182231] hover:text-white'}`} title={`${template.description} ${recommended ? 'Recommended for this resume.' : 'General template option.'} Expected behavior: ${pageLabel}.`}>
                 <span className="block">{template.name}</span>
                 <span className={`mt-1 block text-[8px] uppercase tracking-[0.1em] ${recommended ? 'text-[#72DFCA]' : 'text-zinc-500'}`}>
                   {recommended ? 'Recommended' : 'General Option'}
@@ -491,14 +481,14 @@ function ResumePreview({
       <div className="resume-canvas relative flex min-h-[420px] min-w-0 flex-1 justify-center overflow-x-hidden overflow-y-auto rounded-xl border border-[#263241] bg-[#070A0C] p-2 sm:min-h-[560px] sm:p-4 lg:max-h-[85vh]">
         <div className="forge-pdf-preview-frame relative isolate w-full max-w-[794px]">
           {previewSlots.map((preview, slot) => preview ? (
-            <iframe key={preview.url} src={`${preview.url}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`} title={`${resume.title || 'Resume'} PDF preview${slot + 1}`} onLoad={() => promotePreviewSlot(slot, preview.sequence)} className={`forge-pdf-viewer absolute inset-0 transition-opacity duration-200 ease-out ${activePreviewSlot === slot ? 'z-10 opacity-100' : 'z-0 opacity-0'}`} />
+            <iframe key={preview.url} src={`${preview.url}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`} title={`${resume.title || 'Resume'} PDF preview${slot + 1}`} onLoad={() => promotePreviewSlot(slot, preview.sequence)} className={`forge-pdf-viewer absolute inset-0 min-h-[420px] sm:min-h-[560px] transition-opacity duration-200 ease-out ${activePreviewSlot === slot ? 'z-10 opacity-100' : 'z-0 opacity-0'}`} />
           ) : null)}
           {!hasPreview && (
             <div className="flex h-full flex-col bg-white p-[8%] text-slate-800" role="status" aria-live="polite">
               <div className="h-3 w-20 animate-pulse rounded-full bg-teal-500/80" />
               <div className="mt-[8%] h-6 w-2/3 animate-pulse rounded bg-slate-800/85" />
               <div className="mt-3 h-2.5 w-1/3 animate-pulse rounded bg-slate-300" />
-              <span className="mt-auto text-center text-xs font-semibold text-slate-500">Preparing your A4 preview...</span>
+              <span className="mt-auto text-center text-xs font-semibold text-slate-500">Preparing your template preview...</span>
             </div>
           )}
           {isPreviewRendering && hasPreview && (

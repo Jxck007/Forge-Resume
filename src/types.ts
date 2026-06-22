@@ -19,6 +19,8 @@ export function isTemplateId(value: unknown): value is TemplateId {
   return typeof value === 'string' && TEMPLATE_IDS.includes(value as TemplateId);
 }
 
+export type LinkDisplayMode = 'embedded' | 'raw' | 'inherit';
+
 export const STANDARD_SECTION_KEYS = [
   'summary',
   'education',
@@ -37,6 +39,7 @@ export type StandardSectionKey = (typeof STANDARD_SECTION_KEYS)[number];
 export interface SectionHeadingConfig {
   mode: 'default' | 'custom';
   customTitle?: string;
+  linkDisplayMode?: LinkDisplayMode;
 }
 
 export type ResumeSectionConfig = Record<StandardSectionKey, SectionHeadingConfig>;
@@ -178,6 +181,9 @@ export interface ResumeData {
   title: string;
   templateId: TemplateId;
   linkDisplayMode: 'embedded' | 'raw';
+  linkSettings?: {
+    defaultDisplayMode: Exclude<LinkDisplayMode, 'inherit'>;
+  };
   useProfilePhoto: boolean;
   personalDetails: PersonalDetails;
   summary: string;
@@ -199,22 +205,33 @@ export interface ResumeData {
   isArchived: boolean;
   createdAt: string;
   updatedAt: string;
+  additionalDetails?: string[];
+  learningTargets?: string[];
+  candidateMode?: 'student' | 'professional' | 'auto';
 }
 
 export interface UserSettings {
   uid: string;
   email: string;
-  aiProvider: 'Groq' | 'Gemini' | 'OpenAI' | 'OpenRouter';
+  /** Deprecated: legacy client-side provider selection is intentionally ignored until secure BYOK/server flows exist. */
+  aiProvider?: 'Groq' | 'Gemini' | 'OpenAI' | 'OpenRouter';
+  /** Deprecated: provider keys are intentionally ignored. BYOK will be session-only. */
   groqApiKey?: string;
+  /** Deprecated: provider keys are intentionally ignored. BYOK will be session-only. */
   geminiApiKey?: string;
+  /** Deprecated: provider keys are intentionally ignored. BYOK will be session-only. */
   openaiApiKey?: string;
+  /** Deprecated: provider keys are intentionally ignored. BYOK will be session-only. */
   openRouterApiKey?: string;
   hasCompletedProfile?: boolean;
   modelId?: string;
   providerModels?: Partial<Record<UserSettings['aiProvider'], string>>;
   temperature?: number;
-  defaultTemplate?: string;
-  defaultExportFormat?: string;
+  defaultTemplate?: TemplateId;
+  defaultExportFormat?: 'PDF' | 'json';
+  defaultLinkDisplayMode?: 'embedded' | 'raw';
+  defaultSectionOrderMode?: 'template' | 'custom';
+  defaultUseProfilePhoto?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -235,6 +252,9 @@ export interface ProfileData {
   languages: string[];
   customSections: CustomSection[];
   linkDisplayMode?: 'embedded' | 'raw';
+  linkSettings?: {
+    defaultDisplayMode: Exclude<LinkDisplayMode, 'inherit'>;
+  };
   updatedAt: string;
 }
 
@@ -372,4 +392,83 @@ export interface AtsReport {
   layoutAnalysis: AtsLayoutAnalysis;
   responsivenessAnalysis: AtsResponsivenessAnalysis;
   createdAt: string;
+}
+
+export type AtsIssueSeverityV2 = 'Critical' | 'High' | 'Medium' | 'Low';
+export type AtsIssueGroupV2 =
+  | 'Content'
+  | 'Structure'
+  | 'ATS Essentials'
+  | 'Formatting'
+  | 'Spelling'
+  | 'Grammar'
+  | 'Layout'
+  | 'Responsiveness';
+
+export interface AtsIssue {
+  id: string;
+  title: string;
+  severity: AtsIssueSeverityV2;
+  group: AtsIssueGroupV2;
+  category: string;
+  affectedSection: string;
+  explanation: string;
+  suggestedFix: string;
+  scoreImpact: number;
+  evidence?: string;
+}
+
+export type AtsStageId = 'structureCheck' | 'jobMatch' | 'contentUpgrade' | 'applyToBuilder';
+
+export interface AtsStageResult {
+  stageId: AtsStageId;
+  score: number | null;
+  summary: string;
+  issues: AtsIssue[];
+  status: 'ready' | 'partial' | 'needs_ai' | 'needs_job_description' | 'not_run' | 'error';
+  confidence?: 'low' | 'medium' | 'high';
+}
+
+export type AtsSuggestionType =
+  | 'add_keyword'
+  | 'rewrite_summary'
+  | 'rewrite_bullet'
+  | 'improve_project'
+  | 'add_metric_placeholder'
+  | 'fix_section_order'
+  | 'change_link_mode'
+  | 'add_learning_target';
+
+export interface AtsSuggestion {
+  id: string;
+  type: AtsSuggestionType;
+  target: { sectionId: string; itemId?: string; fieldPath: string };
+  originalValue: unknown;
+  suggestedValue: unknown;
+  reason: string;
+  evidence: string;
+  confidence: number;
+  requiresUserConfirmation: boolean;
+  truthWarning: string;
+  status: 'pending' | 'applied' | 'ignored' | 'not_true' | 'edited';
+}
+
+export interface ResumePatch {
+  id: string;
+  suggestionId: string;
+  operation: 'replace' | 'append' | 'insert' | 'reorder' | 'set';
+  path: string;
+  value: unknown;
+  previousValue: unknown;
+}
+
+export interface AtsResult {
+  overallScore: number;
+  stages: AtsStageResult[];
+  issues: AtsIssue[];
+  generatedAt: string;
+  disclaimer: string;
+  scanMode: 'local' | 'ai-assisted';
+  candidateMode: 'student' | 'professional';
+  suggestions: AtsSuggestion[];
 }

@@ -1,5 +1,6 @@
 import type React from 'react';
 import { Link, Text, View } from '@react-pdf/renderer';
+export { safePdfUrl } from '../../utils/linkDisplay';
 
 export type PdfViewStyle = React.ComponentProps<typeof View>['style'];
 export type PdfTextStyle = React.ComponentProps<typeof Text>['style'];
@@ -19,6 +20,13 @@ export interface ResumePrimitiveStyles {
   date: PdfTextStyle;
   entryDetailRow: PdfViewStyle;
   entryDetailMeta: PdfTextStyle;
+  projectHeader: PdfViewStyle;
+  projectHeaderMeta: PdfViewStyle;
+  projectLinks: PdfViewStyle;
+  projectLinkItem: PdfViewStyle;
+  projectLink: PdfLinkStyle;
+  projectTech: PdfTextStyle;
+  projectDescription: PdfTextStyle;
   metadata: PdfTextStyle;
   description: PdfTextStyle;
   inlineLinks: PdfViewStyle;
@@ -55,10 +63,3 @@ export interface LabeledLink {
   label: string;
   url?: string;
 }
-
-export const safePdfUrl = (value?: string) => {
-  const url = value?.trim();
-  if (!url) return '';
-  if (/^(?:https?:\/\/|mailto:|tel:)/i.test(url)) return url;
-  return `https://${url}`;
-};
