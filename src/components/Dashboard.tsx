@@ -21,7 +21,15 @@ import {
   MoreHorizontal,
 } from 'lucide-react';
 import ConfirmationDialog from './ConfirmationDialog';
-import { extractResumeText, getImportAccept, prepareImageForImport, ResumeImportError, ResumeImportMode, validateImportFile } from '../utils/resumeImport';
+import {
+  getImportAccept,
+  prepareDocxImportPayload,
+  prepareImageForImport,
+  preparePdfImportPayload,
+  ResumeImportError,
+  ResumeImportMode,
+  validateImportFile,
+} from '../utils/resumeImport';
 import { assessResumeImport, ReviewedImport } from '../utils/aiImportQuality';
 import TemplateShowcase, { TEMPLATE_IDS, TEMPLATE_LABELS } from './TemplateShowcase';
 import ActionMenu from './ActionMenu';
@@ -73,6 +81,7 @@ export default function Dashboard({
   const [pastedText, setPastedText] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
   const [reviewData, setReviewData] = useState<ReviewedImport<ResumeData> | null>(null);
+  const [importWarnings, setImportWarnings] = useState<string[]>([]);
   const [importTitle, setImportTitle] = useState('');
   const [importStatus, setImportStatus] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -206,6 +215,7 @@ export default function Dashboard({
     setPastedText('');
     setImportFile(null);
     setReviewData(null);
+    setImportWarnings([]);
     setImportTitle('');
     setImportStatus('');
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -215,6 +225,7 @@ export default function Dashboard({
     setImportMode(mode);
     setImportFile(null);
     setReviewData(null);
+    setImportWarnings([]);
     setImportTitle('');
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -231,10 +242,13 @@ export default function Dashboard({
 
     importInProgressRef.current = true;
     setLoadingAction(true);
-    setImportStatus('Preparing import...');
+    setImportWarnings([]);
+    setImportStatus('Reading file');
     try {
       let rawText = '';
       let sourceLabel = 'resume text';
+      let requestBody: Record<string, unknown> | null = null;
+      const collectedWarnings: string[] = [];
 
       if (importMode === 'text') {
         rawText = pastedText.trim();
@@ -242,6 +256,11 @@ export default function Dashboard({
           showToasts('Please paste the resume text before importing.', 'info');
           return;
         }
+        requestBody = {
+          sourceType: 'text',
+          text: rawText,
+          templateId: newTemplate,
+        };
       } else {
         if (!importFile) {
           showToasts(`Please upload a ${importMode.toUpperCase()} file first.`, 'info');
@@ -254,47 +273,39 @@ export default function Dashboard({
         }
         sourceLabel = `${importMode.toUpperCase()} file`;
         if (importMode === 'image') {
-          setImportStatus('Preparing image for AI import...');
+          setImportStatus('Reading file');
           const { base64: imageBase64, mimeType } = await prepareImageForImport(importFile);
-          const response = await fetch('/api/ai/import', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sourceType: 'image', imageBase64, mimeType, templateId: newTemplate }),
-          });
-          const payload = await response.json().catch(() => null) as null | { ok?: boolean; resume?: ResumeData; message?: string; warnings?: string[] };
-          if (!response.ok || !payload?.ok || !payload.resume) {
-            showToasts(payload?.message || 'This image could not be imported. Try a clearer file.', 'error');
-            return;
+          requestBody = { sourceType: 'image', imageBase64, mimeType, templateId: newTemplate };
+          rawText = importFile.name;
+        } else if (importMode === 'pdf') {
+          setImportStatus('Extracting text');
+          const prepared = await preparePdfImportPayload(importFile);
+          collectedWarnings.push(...prepared.warnings);
+          requestBody = prepared.sourceType === 'image'
+            ? { sourceType: 'image', imageBase64: prepared.imageBase64, mimeType: prepared.mimeType, templateId: newTemplate }
+            : { sourceType: 'pdf_text', text: prepared.text, templateId: newTemplate };
+          rawText = prepared.sourceType === 'pdf_text' ? prepared.text : '';
+        } else {
+          setImportStatus('Extracting text');
+          const prepared = await prepareDocxImportPayload(importFile);
+          collectedWarnings.push(...prepared.warnings);
+          if (!('text' in prepared)) {
+            throw new ResumeImportError('DOCX import returned an invalid extraction payload.', 'docx_invalid_payload');
           }
-          const sourceText = JSON.stringify(payload.resume);
-          setReviewData(assessResumeImport(payload.resume, sourceText));
-          setImportStatus(payload.warnings?.[0] || 'Ready for review');
-          if (!importTitle) setImportTitle(importFile.name.replace(/\.[^.]+$/, '') || 'Imported Resume');
-          return;
-        }
-        setImportStatus(`Extracting text from ${importMode.toUpperCase()}...`);
-        rawText = await extractResumeText(importFile, importMode);
-        if (!rawText.trim()) {
-          showToasts(importMode === 'pdf'
-            ? 'This PDF has little selectable text. Try DOCX, image import, or paste text.'
-            : 'No readable text was extracted from the selected file.', 'error');
-          return;
+          requestBody = { sourceType: prepared.sourceType, text: prepared.text, templateId: newTemplate };
+          rawText = prepared.text;
         }
       }
 
       const titleFromFile = importFile?.name.replace(/\.[^.]+$/, '') || '';
       setImportTitle(prev => prev || titleFromFile || 'Imported Resume');
       showToasts(`Structuring ${sourceLabel} with AI...`, 'info');
-      setImportStatus('Verifying extracted information...');
+      setImportStatus('Structuring content');
 
       const response = await fetch('/api/ai/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sourceType: importMode === 'text' ? 'text' : importMode === 'pdf' ? 'pdf_text' : 'docx_text',
-          text: rawText,
-          templateId: newTemplate,
-        }),
+        body: JSON.stringify(requestBody),
       });
       const payload = await response.json().catch(() => null) as null | { ok?: boolean; resume?: ResumeData; message?: string; warnings?: string[] };
       if (!mountedRef.current) return;
@@ -302,8 +313,10 @@ export default function Dashboard({
         showToasts(payload?.message || 'Resume import could not be completed.', 'error');
         return;
       }
-      setReviewData(assessResumeImport(payload.resume, rawText));
-      setImportStatus(payload.warnings?.[0] || 'Ready for review');
+      setImportStatus('Preparing review');
+      setReviewData(assessResumeImport(payload.resume, rawText || JSON.stringify(payload.resume)));
+      setImportWarnings([...collectedWarnings, ...(payload.warnings || [])]);
+      setImportStatus('Ready for review');
       if (!importTitle) setImportTitle(titleFromFile || 'Imported Resume');
     } catch (error) {
       if (mountedRef.current) {
@@ -337,6 +350,10 @@ export default function Dashboard({
   };
 
   const parsedReview = reviewData?.data;
+  const previewCollection = <T,>(items: T[] | undefined, mapper: (item: T) => string, fallback = 'Not detected') => {
+    const values = (items || []).map(mapper).map(value => value.trim()).filter(Boolean);
+    return values.length ? values.slice(0, 3).join(' • ') : fallback;
+  };
   const reviewSections = parsedReview ? [
     {
       label: 'Personal details',
@@ -352,22 +369,22 @@ export default function Dashboard({
     {
       label: 'Experience',
       ready: Boolean(parsedReview.experience?.length),
-      detail: `${parsedReview.experience?.length || 0} entries`,
+      detail: previewCollection<NonNullable<typeof parsedReview.experience>[number]>(parsedReview.experience, item => `${item.title}${item.company ? ` — ${item.company}` : ''}`),
     },
     {
       label: 'Internships',
       ready: Boolean(parsedReview.internships?.length),
-      detail: `${parsedReview.internships?.length || 0} entries`,
+      detail: previewCollection<NonNullable<typeof parsedReview.internships>[number]>(parsedReview.internships, item => `${item.role}${item.company ? ` — ${item.company}` : ''}`),
     },
     {
       label: 'Education',
       ready: Boolean(parsedReview.education?.length),
-      detail: `${parsedReview.education?.length || 0} entries`,
+      detail: previewCollection<NonNullable<typeof parsedReview.education>[number]>(parsedReview.education, item => `${item.degree}${item.institution ? ` — ${item.institution}` : ''}`),
     },
     {
       label: 'Projects',
       ready: Boolean(parsedReview.projects?.length),
-      detail: `${parsedReview.projects?.length || 0} entries`,
+      detail: previewCollection<NonNullable<typeof parsedReview.projects>[number]>(parsedReview.projects, item => item.name),
     },
     {
       label: 'Skills',
@@ -380,7 +397,10 @@ export default function Dashboard({
     {
       label: 'Certifications and achievements',
       ready: Boolean(parsedReview.certifications?.length || parsedReview.achievements?.length),
-      detail: `${(parsedReview.certifications?.length || 0) + (parsedReview.achievements?.length || 0)} entries`,
+      detail: [
+        ...((parsedReview.certifications || []).slice(0, 2).map(item => item.name)),
+        ...((parsedReview.achievements || []).slice(0, 2)),
+      ].filter(Boolean).join(' • ') || 'Not detected',
     },
     {
       label: 'Languages',
@@ -804,7 +824,7 @@ export default function Dashboard({
               initial={{ scale: 0.95, opacity: 0, y: 10 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 10 }}
-              className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-[#2A2E37] bg-[#171A21] shadow-2xl"
+              className="relative flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[#2A2E37] bg-[#171A21] shadow-2xl"
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-start justify-between border-b border-[#2A2E37] p-6">
@@ -830,8 +850,9 @@ export default function Dashboard({
                 </button>
               </div>
 
+              <div className="min-h-0 flex-1 overflow-y-auto">
               {!reviewData ? (
-                <div className="space-y-5">
+                <div className="space-y-5 p-6">
                   <div className="flex flex-col gap-4 border-y border-[#2A2E37] px-6 py-5 sm:flex-row sm:items-end sm:justify-between">
                     <div className="min-w-0">
                       <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Import target</p>
@@ -948,13 +969,26 @@ export default function Dashboard({
                         <div>
                           {assistedImportAvailable ? (
                             <>
-                              <input
-                                ref={fileInputRef}
-                                type="file"
-                                accept={getImportAccept(importMode)}
-                                onChange={event => setImportFile(event.target.files?.[0] || null)}
-                                className="block w-full rounded-xl border border-[#2A2E37] bg-[#0F1115] px-4 py-3 text-sm text-zinc-300 file:mr-4 file:rounded-lg file:border-0 file:bg-white/[0.06] file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white"
-                              />
+                              <label className="group flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-[#344354] bg-[#0F1115] px-5 py-8 text-center transition hover:border-emerald-400/50 hover:bg-[#121821] focus-within:border-emerald-400/50 focus-within:ring-2 focus-within:ring-emerald-400/10">
+                                <Upload className="h-6 w-6 text-zinc-400 transition group-hover:text-emerald-300" />
+                                <div>
+                                  <p className="text-sm font-semibold text-white">
+                                    {importFile ? importFile.name : `Choose a ${importMode.toUpperCase()} file`}
+                                  </p>
+                                  <p className="mt-1 text-xs text-zinc-500">
+                                    {importMode === 'pdf' && 'Allowed: PDF up to 5MB'}
+                                    {importMode === 'docx' && 'Allowed: DOCX up to 5MB'}
+                                    {importMode === 'image' && 'Allowed: PNG, JPG, JPEG, WEBP up to 4MB'}
+                                  </p>
+                                </div>
+                                <input
+                                  ref={fileInputRef}
+                                  type="file"
+                                  accept={getImportAccept(importMode)}
+                                  onChange={event => setImportFile(event.target.files?.[0] || null)}
+                                  className="sr-only"
+                                />
+                              </label>
                               <p className="mt-1 text-xs text-zinc-500">
                                 {importMode === 'pdf' && 'PDF uses local text extraction first. Weak or scanned PDFs may need image import, DOCX, or pasted text.'}
                                 {importMode === 'docx' && 'DOCX text is extracted in the browser.'}
@@ -972,7 +1006,7 @@ export default function Dashboard({
                   )}
                 </div>
               ) : (
-                <div className="space-y-5">
+                <div className="space-y-5 p-6">
                   <div className="flex items-center justify-between rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
                     <div>
                       <p className="text-xs font-bold uppercase tracking-wider text-emerald-200">Import confidence</p>
@@ -984,6 +1018,14 @@ export default function Dashboard({
                       {reviewData.confidence.overall}%
                     </span>
                   </div>
+                  {importWarnings.length > 0 && (
+                    <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
+                      <p className="text-xs font-bold uppercase tracking-wider text-amber-300">Import warnings</p>
+                      <ul className="mt-2 space-y-1 text-xs text-amber-100/90">
+                        {importWarnings.map(warning => <li key={warning}>• {warning}</li>)}
+                      </ul>
+                    </div>
+                  )}
                   <label className="block">
                     <span className="mb-1.5 block text-xs font-semibold text-zinc-300">Resume name</span>
                     <input
@@ -1023,7 +1065,7 @@ export default function Dashboard({
                                 </span>
                               )}
                             </div>
-                            <p className="mt-0.5 truncate text-xs text-zinc-500">{section.detail}</p>
+                            <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-5 text-zinc-400">{section.detail}</p>
                           </div>
                         </div>
                       );
@@ -1031,8 +1073,9 @@ export default function Dashboard({
                   </div>
                 </div>
               )}
+              </div>
 
-              <div className="flex flex-col-reverse gap-3 border-t border-[#2A2E37] p-6 sm:flex-row sm:items-center sm:justify-between">
+              <div className="sticky bottom-0 flex flex-col-reverse gap-3 border-t border-[#2A2E37] bg-[#171A21] p-6 sm:flex-row sm:items-center sm:justify-between">
                 <div className="space-y-1">
                   <span className="block text-xs text-zinc-500">
                     {reviewData ? `${reviewSections.filter(section => section.ready).length} sections detected` : 'Nothing is saved until review is confirmed.'}
@@ -1040,13 +1083,23 @@ export default function Dashboard({
                   {importStatus && <span className="block text-xs text-zinc-400">{importStatus}</span>}
                 </div>
                 <div className="flex gap-3">
+                  {reviewData && (
+                    <button
+                      type="button"
+                      onClick={() => setReviewData(null)}
+                      disabled={loadingAction}
+                      className="rounded-xl px-4 py-2 text-sm font-semibold text-zinc-400 transition hover:bg-[#2A2E37] hover:text-white"
+                    >
+                      Back
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => reviewData ? setReviewData(null) : resetImport()}
+                    onClick={resetImport}
                     disabled={loadingAction}
                     className="rounded-xl px-4 py-2 text-sm font-semibold text-zinc-400 transition hover:bg-[#2A2E37] hover:text-white"
                   >
-                    {reviewData ? 'Back' : 'Cancel'}
+                    Cancel
                   </button>
                   <button
                     type="button"
@@ -1059,6 +1112,33 @@ export default function Dashboard({
                   </button>
                 </div>
               </div>
+              {loadingAction && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#090C10]/80 p-6 backdrop-blur-sm">
+                  <div className="w-full max-w-sm rounded-2xl border border-[#2A2E37] bg-[#111820] p-5 text-center shadow-2xl">
+                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-400/10 text-emerald-300">
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    </div>
+                    <h4 className="mt-4 text-base font-semibold text-white">{reviewData ? 'Saving resume…' : 'Extracting resume…'}</h4>
+                    <p className="mt-1 text-sm text-zinc-400">{reviewData ? 'Creating your imported draft' : importStatus || 'Preparing review'}</p>
+                    {!reviewData && (
+                      <div className="mt-4 grid grid-cols-2 gap-2 text-left text-xs text-zinc-500">
+                        {['Reading file', 'Extracting text', 'Structuring content', 'Preparing review'].map(step => (
+                          <div
+                            key={step}
+                            className={`rounded-xl border px-3 py-2 ${
+                              importStatus === step
+                                ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200'
+                                : 'border-[#2A2E37] bg-[#0F1115]'
+                            }`}
+                          >
+                            {step}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </motion.div>
           </div>
         )}

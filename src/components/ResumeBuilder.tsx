@@ -146,6 +146,17 @@ function ResumeBuilder({
     resolveSectionHeading(sectionKey, resume.sectionConfig, fallback || DEFAULT_SECTION_HEADINGS[sectionKey]);
 
   const getSectionIssues = (sectionKey: string) => issuesForSection(resume, sectionKey);
+  const emailInvalid = Boolean(resume.personalDetails.email) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resume.personalDetails.email);
+  const phoneInvalid = Boolean(resume.personalDetails.phone) && !/^[+()\-\s0-9]{7,20}$/.test(resume.personalDetails.phone);
+  const isValidUrlLike = (value: string) => !value.trim() || /^(https?:\/\/)?([\w-]+\.)+[\w-]{2,}(\/[^\s]*)?$/i.test(value.trim());
+  const linkedInInvalid = Boolean(resume.personalDetails.linkedin) && !isValidUrlLike(resume.personalDetails.linkedin);
+  const githubInvalid = Boolean(resume.personalDetails.github) && !isValidUrlLike(resume.personalDetails.github);
+  const websiteInvalid = Boolean(resume.personalDetails.website) && !isValidUrlLike(resume.personalDetails.website);
+  const normalizeExternalUrl = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed || /^https?:\/\//i.test(trimmed)) return trimmed;
+    return `https://${trimmed}`;
+  };
 
   const updateSectionHeadingConfig = (
     sectionKey: StandardSectionKey,
@@ -193,7 +204,7 @@ function ResumeBuilder({
     return (
       <div className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-3 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Section title</span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Section heading</span>
           <span className="rounded-full bg-[#171A21] px-2 py-0.5 text-[10px] font-semibold text-[#72DFCA]">
             Live title: {getSectionHeading(sectionKey)}
           </span>
@@ -202,13 +213,13 @@ function ResumeBuilder({
           <button
             type="button"
             onClick={() => updateSectionHeadingConfig(sectionKey, 'custom', config?.customTitle || getSectionHeading(sectionKey))}
-            className="inline-flex min-h-7 items-center gap-1 rounded-md border border-[#2A2E37] bg-[#171A21] px-2 py-1 text-[10px] font-semibold text-zinc-200 transition hover:border-[#3A4B5E]"
+            className={headingButtonCls}
           >
-            <Pencil className="h-2.5 w-2.5" /> Edit title
+            <Pencil className="h-3 w-3" /> Edit heading
           </button>
           {config?.mode === 'custom' && (
-            <button type="button" onClick={() => updateSectionHeadingConfig(sectionKey, 'default', '')} className="min-h-7 rounded-md px-2 py-1 text-[10px] font-semibold text-zinc-400 transition hover:bg-[#171A21] hover:text-white">
-              Return to template title
+            <button type="button" onClick={() => updateSectionHeadingConfig(sectionKey, 'default', '')} className="inline-flex min-h-8 items-center rounded-lg px-2.5 py-1.5 text-[10px] font-semibold text-zinc-400 transition hover:bg-[#171A21] hover:text-white">
+              Return to default
             </button>
           )}
         </div>
@@ -278,6 +289,8 @@ function ResumeBuilder({
       </div>
     );
   };
+
+  const headingButtonCls = 'inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-[#2A2E37] bg-[#171A21] px-2.5 py-1.5 text-[10px] font-semibold text-zinc-200 transition hover:border-[#4B5D72] hover:bg-[#1A212A]';
 
   // Language analysis is paused until it is backed by a validated provider result.
   const renderSectionQualityPanel = (_sectionKey: string) => null;
@@ -926,12 +939,15 @@ function ResumeBuilder({
                 onChange={e => updatePersonal('email', e.target.value)}
                 placeholder="jane.smith@email.com"
                 className={`w-full px-3 py-2 rounded-lg border bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none ${
-                  !resume.personalDetails.email ? 'border-rose-200 border-rose-900/50' : 'border-[#2A2E37]'
+                  !resume.personalDetails.email ? 'border-rose-200 border-rose-900/50' : emailInvalid ? 'border-amber-400/60' : 'border-[#2A2E37]'
                 }`}
                 id="personal-email"
               />
               {!resume.personalDetails.email && (
                 <p className="text-[9px] text-rose-500 font-bold mt-1 tracking-wide">Required for contact</p>
+              )}
+              {resume.personalDetails.email && emailInvalid && (
+                <p className="text-[10px] text-amber-300 mt-1">Enter a valid email address.</p>
               )}
             </div>
             <div>
@@ -948,13 +964,15 @@ function ResumeBuilder({
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">Phone Number</label>
               <input
-                type="text"
+                type="tel"
+                inputMode="tel"
                 value={resume.personalDetails.phone}
                 onChange={e => updatePersonal('phone', e.target.value)}
                 placeholder="+1 (555) 0192-283"
-                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
+                className={`w-full px-3 py-2 rounded-lg border bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none ${phoneInvalid ? 'border-amber-400/60' : 'border-[#2A2E37]'}`}
                 id="personal-phone"
               />
+              {phoneInvalid && <p className="mt-1 text-[10px] text-amber-300">Use a valid phone number format.</p>}
             </div>
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">Location</label>
@@ -970,35 +988,44 @@ function ResumeBuilder({
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">LinkedIn Profile</label>
               <input
-                type="text"
+                type="url"
+                inputMode="url"
                 value={resume.personalDetails.linkedin}
                 onChange={e => updatePersonal('linkedin', e.target.value)}
+                onBlur={e => updatePersonal('linkedin', normalizeExternalUrl(e.target.value))}
                 placeholder="linkedin.com/in/janesmith"
-                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
+                className={`w-full px-3 py-2 rounded-lg border bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none ${linkedInInvalid ? 'border-amber-400/60' : 'border-[#2A2E37]'}`}
                 id="personal-linkedin"
               />
+              {linkedInInvalid && <p className="mt-1 text-[10px] text-amber-300">Enter a valid URL or domain.</p>}
             </div>
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">GitHub Link</label>
               <input
-                type="text"
+                type="url"
+                inputMode="url"
                 value={resume.personalDetails.github}
                 onChange={e => updatePersonal('github', e.target.value)}
+                onBlur={e => updatePersonal('github', normalizeExternalUrl(e.target.value))}
                 placeholder="github.com/janesmith"
-                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
+                className={`w-full px-3 py-2 rounded-lg border bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none ${githubInvalid ? 'border-amber-400/60' : 'border-[#2A2E37]'}`}
                 id="personal-github"
               />
+              {githubInvalid && <p className="mt-1 text-[10px] text-amber-300">Enter a valid URL or domain.</p>}
             </div>
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">Portfolio or Website</label>
               <input
-                type="text"
+                type="url"
+                inputMode="url"
                 value={resume.personalDetails.website}
                 onChange={e => updatePersonal('website', e.target.value)}
+                onBlur={e => updatePersonal('website', normalizeExternalUrl(e.target.value))}
                 placeholder="janesmith.dev"
-                className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none"
+                className={`w-full px-3 py-2 rounded-lg border bg-[#0F1115] text-xs focus:border-indigo-500 focus:bg-[#171A21] text-white transition outline-none ${websiteInvalid ? 'border-amber-400/60' : 'border-[#2A2E37]'}`}
                 id="personal-website"
               />
+              {websiteInvalid && <p className="mt-1 text-[10px] text-amber-300">Enter a valid URL or domain.</p>}
             </div>
             <div className="sm:col-span-2">
               <label className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">Link Display Mode</label>
@@ -1738,9 +1765,11 @@ function ResumeBuilder({
                         <div>
                           <label className="block text-[10px] font-bold text-zinc-400 mb-1">GitHub Link</label>
                           <input
-                            type="text"
+                            type="url"
+                            inputMode="url"
                             value={proj.github}
                             onChange={v => updateProject(proj.id, 'github', v.target.value)}
+                            onBlur={v => updateProject(proj.id, 'github', normalizeExternalUrl(v.target.value))}
                             placeholder="github.com/project"
                             className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-white text-xs outline-none"
                           />
@@ -1748,9 +1777,11 @@ function ResumeBuilder({
                         <div>
                           <label className="block text-[10px] font-bold text-zinc-400 mb-1">Live Demo link</label>
                           <input
-                            type="text"
+                            type="url"
+                            inputMode="url"
                             value={proj.live}
                             onChange={v => updateProject(proj.id, 'live', v.target.value)}
+                            onBlur={v => updateProject(proj.id, 'live', normalizeExternalUrl(v.target.value))}
                             placeholder="my-project.vercel.app"
                             className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-white text-xs outline-none"
                           />
@@ -1875,9 +1906,11 @@ function ResumeBuilder({
                         <div>
                           <label className="block text-[10px] font-bold text-zinc-400 mb-1">Verification URL Link</label>
                           <input
-                            type="text"
+                            type="url"
+                            inputMode="url"
                             value={c.url}
                             onChange={v => updateCertification(c.id, 'url', v.target.value)}
+                            onBlur={v => updateCertification(c.id, 'url', normalizeExternalUrl(v.target.value))}
                             placeholder="credential.net/aws-0x"
                             className="w-full px-3 py-2 rounded-lg border border-[#2A2E37] bg-[#0F1115] text-white text-xs outline-none"
                           />
