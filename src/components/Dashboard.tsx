@@ -181,6 +181,21 @@ export default function Dashboard({
     (aiState.mode === 'free' && aiState.freeBetaAvailable === true) ||
     (aiState.mode === 'byok' && aiState.isConnected)
   );
+  const aiStatusLabel = isGuestMode
+    ? 'Sign in to use Free AI'
+    : aiState.mode === 'byok' && aiState.isConnected
+      ? 'BYOK connected'
+      : aiState.freeStatusLoading
+        ? 'Checking Free AI…'
+        : aiState.mode === 'free' && aiState.freeBetaAvailable
+          ? 'Free AI ready'
+          : aiState.freeStatusReason === 'quota_store_missing'
+            ? 'Free AI quota store not configured'
+            : aiState.freeStatusReason === 'missing_provider_keys'
+              ? 'Free AI provider keys missing'
+              : aiState.freeStatusReason === 'guest'
+                ? 'Sign in to use Free AI'
+                : 'Free AI paused';
 
   const resetImport = () => {
     setImportOpen(false);
@@ -235,10 +250,36 @@ export default function Dashboard({
           return;
         }
         sourceLabel = `${importMode.toUpperCase()} file`;
+        if (importMode === 'image') {
+          setImportStatus('Preparing image for AI import...');
+          const imageBase64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+            reader.onerror = () => reject(new Error('Unable to read image.'));
+            reader.readAsDataURL(importFile);
+          });
+          const response = await fetch('/api/ai/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sourceType: 'image', imageBase64, mimeType: importFile.type || 'image/png', templateId: newTemplate }),
+          });
+          const payload = await response.json().catch(() => null) as null | { ok?: boolean; resume?: ResumeData; message?: string };
+          if (!response.ok || !payload?.ok || !payload.resume) {
+            showToasts(payload?.message || 'This image could not be imported. Try a clearer file.', 'error');
+            return;
+          }
+          const sourceText = JSON.stringify(payload.resume);
+          setReviewData(assessResumeImport(payload.resume, sourceText));
+          setImportStatus('Ready for review');
+          if (!importTitle) setImportTitle(importFile.name.replace(/\.[^.]+$/, '') || 'Imported Resume');
+          return;
+        }
         setImportStatus(`Extracting text from ${importMode.toUpperCase()}...`);
         rawText = await extractResumeText(importFile, importMode);
         if (!rawText.trim()) {
-          showToasts('No readable text was extracted from the selected file.', 'error');
+          showToasts(importMode === 'pdf'
+            ? 'This PDF has little selectable text. Try DOCX, image import, or paste text.'
+            : 'No readable text was extracted from the selected file.', 'error');
           return;
         }
       }
@@ -248,15 +289,22 @@ export default function Dashboard({
       showToasts(`Structuring ${sourceLabel} with AI...`, 'info');
       setImportStatus('Verifying extracted information...');
 
-      const result = await generate({
-        task: 'import_text_resume',
-        input: rawText,
-        tone: 'professional',
-        maxOutputTokens: 1200,
+      const response = await fetch('/api/ai/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceType: importMode === 'text' ? 'text' : importMode === 'pdf' ? 'pdf_text' : 'docx_text',
+          text: rawText,
+          templateId: newTemplate,
+        }),
       });
+      const payload = await response.json().catch(() => null) as null | { ok?: boolean; resume?: ResumeData; message?: string };
       if (!mountedRef.current) return;
-      const cleanedResult = result.text.trim().replace(/^```json\s*/i, '').replace(/^```/, '').replace(/```$/, '').trim();
-      setReviewData(assessResumeImport(JSON.parse(cleanedResult), rawText));
+      if (!response.ok || !payload?.ok || !payload.resume) {
+        showToasts(payload?.message || 'Resume import could not be completed.', 'error');
+        return;
+      }
+      setReviewData(assessResumeImport(payload.resume, rawText));
       setImportStatus('Ready for review');
       if (!importTitle) setImportTitle(titleFromFile || 'Imported Resume');
     } catch (error) {
@@ -374,6 +422,22 @@ export default function Dashboard({
           </div>
         </div>
       </section>
+
+      <div className="mb-4 rounded-2xl border border-[#2A2E37] bg-[#111820] p-4 text-sm text-zinc-300">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="font-semibold text-white">Forge Free Beta AI</p>
+            <p className="mt-1 text-zinc-400">Use AI to improve summaries, rewrite bullets, fix grammar, and import resumes. Every suggestion is reviewed before applying.</p>
+          </div>
+          <div className="text-xs text-zinc-400">{aiStatusLabel}</div>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-medium text-zinc-400">
+          <span className="rounded-full bg-white/[0.04] px-2.5 py-1">25 writing actions per 12 hours</span>
+          <span className="rounded-full bg-white/[0.04] px-2.5 py-1">3 resume imports per 12 hours</span>
+          <span className="rounded-full bg-white/[0.04] px-2.5 py-1">Limits protect the beta from abuse and cost spikes</span>
+          <span className="rounded-full bg-white/[0.04] px-2.5 py-1">Using your own key does not use Forge Free AI quota</span>
+        </div>
+      </div>
 
       {isGuestMode && (
         <div className="mb-4 flex flex-col gap-2 rounded-xl bg-[#111820] px-4 py-3 text-xs text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
@@ -880,39 +944,24 @@ export default function Dashboard({
                       ) : (
                         <div>
                           {assistedImportAvailable ? (
-                            <div className="rounded-xl border border-[#2A2E37] bg-[#0F1115] p-5 text-sm text-zinc-300">
-                              Paste text import is available now. PDF and DOCX import are being upgraded and will return soon.
-                            </div>
-                          ) : (
                             <>
                               <input
                                 ref={fileInputRef}
                                 type="file"
                                 accept={getImportAccept(importMode)}
                                 onChange={event => setImportFile(event.target.files?.[0] || null)}
-                                className="hidden"
+                                className="block w-full rounded-xl border border-[#2A2E37] bg-[#0F1115] px-4 py-3 text-sm text-zinc-300 file:mr-4 file:rounded-lg file:border-0 file:bg-white/[0.06] file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white"
                               />
-                              <button
-                                type="button"
-                                onClick={() => fileInputRef.current?.click()}
-                                className="flex min-h-40 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-700 bg-zinc-900/30 p-6 text-center transition hover:border-emerald-400/70"
-                              >
-                                <Upload className="mb-3 h-7 w-7 text-emerald-300" />
-                                <strong className="text-sm text-white">
-                                  {importFile ? importFile.name : `Choose ${importMode.toUpperCase()} file`}
-                                </strong>
-                                <span className="mt-1 text-xs text-zinc-500">
-                                  {importMode === 'pdf' && 'Text extraction uses PDF.js'}
-                                  {importMode === 'docx' && 'Text extraction uses Mammoth.js'}
-                                  {importMode === 'image' && 'OCR uses Tesseract.js · JPG, PNG, or WEBP'}
-                                </span>
-                                {!importFile && (
-                                  <span className="mt-2 text-[11px] text-zinc-400">
-                                    No file selected yet.
-                                  </span>
-                                )}
-                              </button>
+                              <p className="mt-1 text-xs text-zinc-500">
+                                {importMode === 'pdf' && 'PDF uses local text extraction first. Scanned files may need another source.'}
+                                {importMode === 'docx' && 'DOCX text is extracted in the browser.'}
+                                {importMode === 'image' && 'Images are sent to AI vision for structured extraction.'}
+                              </p>
                             </>
+                          ) : (
+                            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-200">
+                              Assisted import is not available right now.
+                            </div>
                           )}
                         </div>
                       )}
@@ -996,11 +1045,11 @@ export default function Dashboard({
                   <button
                     type="button"
                     onClick={reviewData ? handleImportSave : handleImportParse}
-                    disabled={isGuestMode || loadingAction || isGenerating || !assistedImportAvailable || (Boolean(reviewData) && !importTitle.trim()) || (!reviewData && importMode === 'text' && !pastedText.trim()) || (!reviewData && importMode !== 'text')}
+                    disabled={isGuestMode || loadingAction || isGenerating || !assistedImportAvailable || !newTemplate || (Boolean(reviewData) && !importTitle.trim()) || (!reviewData && importMode === 'text' && !pastedText.trim()) || (!reviewData && importMode !== 'text' && !importFile)}
                     className="flex items-center gap-2 rounded-xl bg-emerald-400 px-5 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {loadingAction ? <Loader2 className="h-4 w-4 animate-spin" /> : reviewData ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-                    <span>{loadingAction ? importStatus : reviewData ? 'Save Imported Resume' : 'Extract and Review'}</span>
+                    <span>{loadingAction ? 'Importing…' : reviewData ? 'Save imported resume' : importMode === 'text' ? 'Import resume text' : importMode === 'pdf' ? 'Import PDF resume' : importMode === 'docx' ? 'Import DOCX resume' : 'Import image resume'}</span>
                   </button>
                 </div>
               </div>

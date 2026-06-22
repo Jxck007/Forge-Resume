@@ -338,6 +338,10 @@ export default function App() {
   useEffect(() => {
     if (!authReady || showProfileSetup || (!user && !isGuestMode) || (user && !workspaceHydrated)) return;
     const key = user ? storageKeys.user.tutorialCompleted(user.uid) : storageKeys.guest.tutorialCompleted;
+    const legacyKey = user ? `forgeResume:user:${user.uid}:tutorialCompleted` : 'forgeResume:guest:tutorialCompleted';
+    if (readStorageValue(legacyKey) === 'true' && readStorageValue(key) !== 'true') {
+      writeStorageValue(key, 'true');
+    }
     if (readStorageValue(key) !== 'true') {
       navigateTo('/dashboard', 'dashboard');
       setTutorialContext('dashboard');
@@ -350,6 +354,13 @@ export default function App() {
     writeStorageValue(key, 'true');
     setTutorialOpen(false);
   }, [user]);
+
+  const restartTutorial = React.useCallback(() => {
+    const key = user ? storageKeys.user.tutorialCompleted(user.uid) : storageKeys.guest.tutorialCompleted;
+    removeStorageValue(key);
+    setTutorialContext(activeTab === 'builder' ? 'builder' : activeTab === 'profile' ? 'profile' : 'dashboard');
+    setTutorialOpen(true);
+  }, [activeTab, user]);
 
   useEffect(() => {
     if (!user || !guestImportNoticePending) return;
@@ -760,8 +771,7 @@ export default function App() {
             if (activeTab === 'settings') {
               setSettingsTourRequestId(Date.now());
             } else {
-              setTutorialContext(activeTab === 'builder' ? 'builder' : activeTab === 'profile' ? 'profile' : 'dashboard');
-              setTutorialOpen(true);
+              restartTutorial();
             }
           }}
           onLogout={user ? handleLogout : returnToAuth}
