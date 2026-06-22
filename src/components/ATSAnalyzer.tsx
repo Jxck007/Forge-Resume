@@ -775,7 +775,7 @@ export default function ATSAnalyzer({
           setProgressStatusMsg('Analyzing image vectors...');
           extractedRawText = await extractImageTextOCR(file);
         } else {
-          showToasts('Unsupported file format. Please upload PDF, DOCX, or Image (PNG/JPG/JPEG).', 'error');
+          showToasts('Unsupported file format. Please upload PDF or Image (PNG/JPG/JPEG).', 'error');
           setProgressStep('idle');
           return;
         }
@@ -1125,7 +1125,7 @@ export default function ATSAnalyzer({
                   type="file" 
                   ref={fileInputRef}
                   onChange={handleFileChange}
-                  accept=".pdf,.docx,.png,.jpg,.jpeg"
+                  accept=".pdf,.png,.jpg,.jpeg"
                   className="hidden" 
                 />
 
@@ -1138,7 +1138,7 @@ export default function ATSAnalyzer({
                       Drop your resume here
                     </p>
                     <p className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[210px] mb-3 leading-normal">
-                      Files supported: PDF, DOCX, or images (includes OCR reader).
+                      Files supported: PDF or images (includes OCR reader).
                     </p>
                     <button
                       type="button"

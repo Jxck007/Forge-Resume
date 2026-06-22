@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Text,
   View,
+  Link,
 } from '@react-pdf/renderer';
 import {
   ResumeData,
@@ -909,6 +910,18 @@ const buildStyles = (
       width: '69%',
       paddingLeft: 2 * columnFactor,
     },
+    designerContact: {
+      marginBottom: sectionGap,
+      paddingBottom: 5 * sidebarFactor,
+      borderBottomWidth: 0.7,
+      borderBottomColor: profile.border,
+    },
+    designerContactLine: {
+      marginTop: 2,
+      color: profile.muted,
+      fontSize: resumeTypography.metadata,
+      lineHeight: 1.25,
+    },
     executiveSummary: {
       marginBottom: sectionGap,
       paddingTop: 7 * summaryFactor,
@@ -1206,6 +1219,21 @@ function ResumePdfDocument({
     return (
       <View style={styles.bodyColumns}>
         <View style={styles.portfolioSidebar}>
+          {templateId === 'designer' && (
+            <View style={styles.designerContact} wrap={false}>
+              <Text style={styles.sectionHeading}>Contact</Text>
+              {[details.email, details.phone, details.location].filter(Boolean).map(value => (
+                <Text key={value} style={styles.designerContactLine}>{value}</Text>
+              ))}
+              {[
+                ['LinkedIn', details.linkedin],
+                ['GitHub', details.github],
+                ['Portfolio', details.website],
+              ].filter(([, value]) => Boolean(value)).map(([label, value]) => (
+                <Link key={label} src={/^https?:\/\//i.test(value) ? value : `https://${value}`} style={styles.designerContactLine}>{label}</Link>
+              ))}
+            </View>
+          )}
           {sidebarOrder.map((sectionId, index) =>
             renderSection(sectionId, index === sidebarOrder.length - 1)
           )}
@@ -1242,6 +1270,7 @@ function ResumePdfDocument({
           photoSource={photoSource}
           usePhoto={usePhoto}
           styles={primitiveStyles}
+          showContact={templateId !== 'designer'}
         />
         {renderBody()}
       </Page>

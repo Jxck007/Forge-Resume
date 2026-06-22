@@ -18,7 +18,7 @@ import {
 import { getUserSettings, saveUserSettings } from '../services/firebase';
 import { TemplateId, UserSettings } from '../types';
 import { readStorageValue, storageKeys, writeStorageValue } from '../utils/storageKeys';
-import { TEMPLATE_IDS, TEMPLATE_LABELS } from './TemplateShowcase';
+import { TEMPLATE_IDS, TEMPLATE_LABELS, VISIBLE_TEMPLATE_IDS } from './TemplateShowcase';
 import GuidedSpotlightTour, { GuidedTourStep } from './GuidedSpotlightTour';
 import AiAssistPanel from './ai/AiAssistPanel';
 
@@ -50,7 +50,7 @@ export default function Settings({ user, showToasts, onKeyConfigured, onNavigate
       .then(data => {
         if (!data) return;
         setSettings(data);
-        setDefaultTemplate(data.defaultTemplate || 'modern');
+        setDefaultTemplate(VISIBLE_TEMPLATE_IDS.includes(data.defaultTemplate || 'modern') ? data.defaultTemplate as TemplateId : 'modern');
         setDefaultExportFormat(data.defaultExportFormat || 'PDF');
         setDefaultLinkDisplayMode(data.defaultLinkDisplayMode || 'embedded');
         setDefaultSectionOrderMode(data.defaultSectionOrderMode || 'template');
@@ -163,7 +163,7 @@ export default function Settings({ user, showToasts, onKeyConfigured, onNavigate
                   <label className="forge-field">
                     <span>Default template</span>
                     <select value={defaultTemplate} onChange={event => setDefaultTemplate(event.target.value as TemplateId)}>
-                      {TEMPLATE_IDS.map(templateId => <option key={templateId} value={templateId}>{TEMPLATE_LABELS[templateId]}</option>)}
+                      {VISIBLE_TEMPLATE_IDS.map(templateId => <option key={templateId} value={templateId}>{TEMPLATE_LABELS[templateId]}</option>)}
                     </select>
                     <small>Applied when you start a new resume.</small>
                   </label>

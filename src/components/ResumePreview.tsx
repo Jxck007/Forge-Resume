@@ -8,14 +8,15 @@ import React, {
   useState,
 } from 'react';
 import { pdf } from '@react-pdf/renderer';
-import { AlertTriangle, ChevronDown, Eye, FileDown, FileType2, Image, Loader2, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Eye, FileDown, Image, Loader2, X } from 'lucide-react';
 import { ResumeData, TemplateId } from '../types';
+import { VISIBLE_TEMPLATE_IDS } from './TemplateShowcase';
 import ResumePdfDocument, {
   FORCE_SINGLE_PAGE_PROFILE,
   SINGLE_PAGE_MAX_COMPACT_LEVEL,
 } from './ResumePdfDocument';
 import ActionMenu from './ActionMenu';
-import { createResumeDocx, createResumePng, downloadBlob } from '../utils/resumeExport';
+import { createResumePng, downloadBlob } from '../utils/resumeExport';
 
 interface ResumePreviewProps {
   resume: ResumeData;
@@ -52,7 +53,6 @@ const TEMPLATES: { id: TemplateId; name: string; description: string }[] = [
   { id: 'softwareEngineer', name: 'Software Developer', description: 'GitHub-inspired technology matrix with projects and stack first.' },
   { id: 'student', name: 'Academic Student', description: 'Merriweather and Inter combination with education-first ordering.' },
   { id: 'startup', name: 'Startup Growth', description: 'Compact achievement cards and projects-first ordering.' },
-  { id: 'designer', name: 'Designer Portfolio', description: 'Dark corporate header with a compact two-column portfolio layout.' },
   { id: 'dataAnalyst', name: 'Data & Metrics', description: 'Capability indicators, project emphasis, and analytics hierarchy.' },
   { id: 'classic', name: 'Classical Editorial', description: 'Merriweather magazine typography with elegant double separators.' },
 ];
@@ -100,7 +100,7 @@ function ResumePreview({
   showToasts,
 }: ResumePreviewProps) {
   const [exportError, setExportError] = useState<{ message: string } | null>(null);
-  const [exporting, setExporting] = useState<'pdf' | 'docx' | 'image' | null>(null);
+  const [exporting, setExporting] = useState<'pdf' | 'image' | null>(null);
   const isExporting = exporting !== null;
   const [isPreviewRendering, setIsPreviewRendering] = useState(false);
   const [fitMode, setFitMode] = useState<FitMode>('single');
@@ -130,6 +130,10 @@ function ResumePreview({
   const deferredRenderInput = useDeferredValue(renderInput);
   const selectedTemplateConfig = TEMPLATE_BY_ID.get(selectedTemplate) || TEMPLATES[0];
   const templateAllowsPhoto = selectedTemplate !== 'atsFriendly';
+  const visibleTemplates = useMemo(
+    () => TEMPLATES.filter(template => VISIBLE_TEMPLATE_IDS.includes(template.id) || template.id === selectedTemplate),
+    [selectedTemplate]
+  );
   const semanticRecommendationIds = useMemo(
     () => getSemanticTemplateRecommendations(stableResume),
     [stableResume]
@@ -139,8 +143,8 @@ function ResumePreview({
       id => TEMPLATE_BY_ID.get(id) || TEMPLATES[0]
     );
     const ids = new Set(recommended.map(template => template.id));
-    return [...recommended, ...TEMPLATES.filter(template => !ids.has(template.id))];
-  }, [semanticRecommendationIds]);
+    return [...recommended, ...visibleTemplates.filter(template => !ids.has(template.id))];
+  }, [semanticRecommendationIds, visibleTemplates]);
 
   const renderDocumentBlob = useCallback(async (
     input: PdfRenderInput,
@@ -207,12 +211,12 @@ function ResumePreview({
     const sequence = ++expectationSequenceRef.current;
     let cancelled = false;
     setTemplatePageExpectations(Object.fromEntries(
-      TEMPLATES.map(template => [template.id, 'checking'])
+      visibleTemplates.map(template => [template.id, 'checking'])
     ) as Partial<Record<TemplateId, TemplatePageExpectation>>);
 
     const timer = window.setTimeout(async () => {
       const expectations: Partial<Record<TemplateId, TemplatePageExpectation>> = {};
-      for (const template of TEMPLATES) {
+      for (const template of visibleTemplates) {
         if (cancelled || sequence !== expectationSequenceRef.current) return;
         try {
           let compactLevel = 0;
@@ -341,24 +345,6 @@ function ResumePreview({
     }
   };
 
-  const handleDownloadDocx = async () => {
-    if (isExporting) return;
-    setExportError(null);
-    setExporting('docx');
-    try {
-      const blob = await createResumeDocx(resume);
-      const safeName = resume.personalDetails.fullName?.replace(/[^a-z0-9]/gi, '_') || 'Resume';
-      downloadBlob(blob, `${safeName}.docx`);
-      showToasts('DOCX downloaded successfully.', 'success');
-    } catch {
-      const message = 'Forge could not generate the DOCX safely. Please try again.';
-      setExportError({ message });
-      showToasts(message, 'error');
-    } finally {
-      setExporting(null);
-    }
-  };
-
   const handleDownloadImage = async () => {
     if (isExporting) return;
     setExportError(null);
@@ -459,7 +445,6 @@ function ResumePreview({
                 triggerContent={<>{isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}<span>{exporting ? `Exporting ${exporting.toUpperCase()}…` : 'Export'}</span><ChevronDown className="h-3.5 w-3.5" /></>}
                 items={[
                   { label: 'Export PDF', icon: <FileDown className="h-4 w-4" />, onSelect: handleDownloadPDF, disabled: isExporting || !hasPreview || singlePageBlocked },
-                  { label: 'Export DOCX', icon: <FileType2 className="h-4 w-4" />, onSelect: handleDownloadDocx, disabled: isExporting },
                   { label: 'Export Image', icon: <Image className="h-4 w-4" />, onSelect: handleDownloadImage, disabled: isExporting || !hasPreview || singlePageBlocked },
                 ]}
               />

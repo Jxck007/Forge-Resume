@@ -259,6 +259,9 @@ export function getImportAccept(mode: Exclude<ResumeImportMode, 'text'>): string
 
 export const ALL_IMPORT_ACCEPT = '.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp';
 
+/** User-facing upload accept list — excludes DOCX per product direction. */
+export const USER_IMPORT_ACCEPT = '.pdf,image/jpeg,image/png,image/webp';
+
 export function inferImportMode(file: File): Exclude<ResumeImportMode, 'text'> | null {
   const extension = file.name.split('.').pop()?.toLowerCase();
   if (extension === 'pdf') return 'pdf';

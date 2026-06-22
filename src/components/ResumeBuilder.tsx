@@ -911,7 +911,7 @@ function ResumeBuilder({
             Use AI to improve summaries, rewrite bullets, fix grammar, and import resumes. Every suggestion is reviewed before applying.
           </p>
           <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-zinc-500">
-            <span>25 writing actions per 12 hours</span>
+            <span>20 writing actions per 12 hours</span>
             <span>3 resume imports per 12 hours</span>
             <span>Using your own key does not use Forge Free AI quota</span>
           </div>

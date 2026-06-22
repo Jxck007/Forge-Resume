@@ -10,6 +10,7 @@ interface HeaderBlockProps {
   photoSource?: string;
   usePhoto: boolean;
   styles: ResumePrimitiveStyles;
+  showContact?: boolean;
 }
 
 export function HeaderBlock({
@@ -18,6 +19,7 @@ export function HeaderBlock({
   photoSource,
   usePhoto,
   styles,
+  showContact = true,
 }: HeaderBlockProps) {
   return (
     <View style={styles.header}>
@@ -26,7 +28,7 @@ export function HeaderBlock({
         {details.professionalTitle ? (
           <Text style={styles.title}>{details.professionalTitle}</Text>
         ) : null}
-        <ContactRow details={details} linkDisplayMode={linkDisplayMode} styles={styles} />
+        {showContact ? <ContactRow details={details} linkDisplayMode={linkDisplayMode} styles={styles} /> : null}
       </View>
       {usePhoto && photoSource ? <Image src={photoSource} style={styles.photo} /> : null}
     </View>

@@ -15,7 +15,7 @@ export default function NotFoundPage({ onOpenDashboard }: NotFoundPageProps) {
           This page is not part of your resume workspace.
         </h2>
         <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-zinc-400">
-          The link may be outdated, moved, or unavailable.
+          The link may be outdated, moved, or unavailable. Return to the dashboard to open an existing resume or start a new one.
         </p>
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
           <button
@@ -24,7 +24,7 @@ export default function NotFoundPage({ onOpenDashboard }: NotFoundPageProps) {
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-400 px-5 py-2.5 text-sm font-semibold text-[#08110F] transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200"
           >
             <ArrowRight className="h-4 w-4" />
-            Go to Dashboard
+            Return to Dashboard
           </button>
         </div>
       </div>

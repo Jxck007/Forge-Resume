@@ -13,30 +13,12 @@ export const TEMPLATE_LABELS: Record<TemplateId, string> = {
 };
 
 export const TEMPLATE_IDS = Object.keys(TEMPLATE_LABELS) as TemplateId[];
+export const VISIBLE_TEMPLATE_IDS: TemplateId[] = [
+  'modern', 'minimal', 'corporate', 'executive', 'creative', 'atsFriendly',
+  'softwareEngineer', 'student', 'startup', 'dataAnalyst', 'classic',
+];
 
 export function TemplateSample({ templateId }: { templateId: TemplateId }) {
-  if (templateId === 'designer') {
-    return (
-      <div className="aspect-[1/1.28] overflow-hidden rounded-md bg-[#f4f3ef] text-left text-slate-800 shadow-sm" aria-hidden="true">
-        <div className="bg-[#17202a] px-3 py-3 text-[#f8f6f1]">
-          <div className="text-[9px] font-black leading-none tracking-wide">JOHN DOE</div>
-          <div className="mt-1 text-[4px] uppercase tracking-widest text-[#c6a36f]">Senior Product Designer</div>
-        </div>
-        <div className="grid h-full grid-cols-[32%_1fr] gap-2 p-2">
-          <div className="border-t-2 border-[#9b7a4c] bg-[#e5e7e6] p-1.5 text-[4px] leading-tight">
-            <b>CONTACT</b><p className="mt-1">Austin, TX<br />john@example.com</p>
-            <b className="mt-2 block">EDUCATION</b><p className="mt-1">B.S. Design</p>
-            <b className="mt-2 block">SKILLS</b><p className="mt-1">Research<br />Systems<br />Figma</p>
-          </div>
-          <div className="text-[4px] leading-tight">
-            <b className="block text-[5px] uppercase text-[#9b7a4c]">Profile</b><p className="mt-1">Product designer creating clear enterprise experiences.</p>
-            <b className="mt-2 block text-[5px] uppercase text-[#9b7a4c]">Selected Projects</b><p className="mt-1 font-semibold">Analytics Platform</p><p>Led research and design delivery.</p>
-            <b className="mt-2 block text-[5px] uppercase text-[#9b7a4c]">Experience</b><p className="mt-1 font-semibold">Senior Product Designer</p><p>Northstar Labs</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
   const accent = templateId === 'corporate' || templateId === 'classic' || templateId === 'atsFriendly'
     ? 'bg-zinc-700' : templateId === 'creative'
       ? 'bg-sky-500' : templateId === 'executive' ? 'bg-amber-700' : 'bg-emerald-500';
@@ -115,7 +97,7 @@ export default function TemplateShowcase({ selectedTemplate, onSelect, onStart, 
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto xl:grid xl:grid-cols-[280px_minmax(0,1fr)] xl:gap-5 xl:overflow-hidden">
         <div className="flex shrink-0 gap-2 overflow-x-auto pb-2 xl:grid xl:grid-cols-1 xl:overflow-y-auto xl:overflow-x-hidden xl:pr-1" aria-label="Available resume templates">
-          {TEMPLATE_IDS.map(templateId => (
+          {VISIBLE_TEMPLATE_IDS.map(templateId => (
             <button key={templateId} type="button" onClick={() => onSelect(templateId)} aria-pressed={selectedTemplate === templateId} className={`flex min-w-[160px] max-w-[190px] items-center gap-3 rounded-xl border p-2 text-left transition xl:min-w-0 xl:max-w-none ${selectedTemplate === templateId ? 'border-emerald-400 bg-emerald-400/10' : 'border-[#2A2E37] bg-[#0F1115] hover:border-zinc-600'}`}>
               <div className="w-16 shrink-0"><TemplateSample templateId={templateId} /></div>
               <div className="min-w-0"><strong className="block truncate text-xs text-white">{TEMPLATE_LABELS[templateId]}</strong><span className="mt-1 flex items-center gap-1 text-[10px] text-zinc-500">Preview <ArrowRight className="h-3 w-3" /></span></div>
