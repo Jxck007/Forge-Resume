@@ -10,6 +10,7 @@ import {
   UserSettings,
   StandardSectionKey,
   LinkDisplayMode,
+  ResumeLanguageQuality,
 } from '../types';
 import {
   User,
@@ -46,6 +47,7 @@ import {
   getEducationScoreType,
 } from '../utils/educationScore';
 import {
+  analyzeResumeLanguageQuality,
   applyLanguageSuggestion,
   issuesForSection,
 } from '../utils/languageQuality';
@@ -97,6 +99,8 @@ function ResumeBuilder({
     whatChanged: string[];
   } | null>(null);
   const [aiSuggestion, setAiSuggestion] = useState<AiSuggestion | null>(null);
+  const [liveLanguageQuality, setLiveLanguageQuality] = useState<ResumeLanguageQuality>(resume.languageQuality);
+  const [ignoredLanguageIssues, setIgnoredLanguageIssues] = useState<Set<string>>(() => new Set());
   const [summaryRewriteStyle, setSummaryRewriteStyle] = useState<AiRewriteStyle>('professional');
   const [bulletRewriteStyle, setBulletRewriteStyle] = useState<AiRewriteStyle>('stronger_verbs');
   const aiApplyRef = useRef<(() => void) | null>(null);
@@ -138,6 +142,13 @@ function ResumeBuilder({
     };
   }, []);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (mountedRef.current) setLiveLanguageQuality(analyzeResumeLanguageQuality(resume));
+    }, 1_000);
+    return () => window.clearTimeout(timer);
+  }, [resume]);
+
   const toggleSection = (sec: string) => {
     setOpenSections(prev => ({ ...prev, [sec]: !prev[sec] }));
   };
@@ -145,7 +156,10 @@ function ResumeBuilder({
   const getSectionHeading = (sectionKey: StandardSectionKey, fallback?: string) =>
     resolveSectionHeading(sectionKey, resume.sectionConfig, fallback || DEFAULT_SECTION_HEADINGS[sectionKey]);
 
-  const getSectionIssues = (sectionKey: string) => issuesForSection(resume, sectionKey);
+  const getSectionIssues = (sectionKey: string) => issuesForSection(
+    { ...resume, languageQuality: liveLanguageQuality },
+    sectionKey
+  ).filter(issue => !ignoredLanguageIssues.has(issue.id));
   const emailInvalid = Boolean(resume.personalDetails.email) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resume.personalDetails.email);
   const phoneInvalid = Boolean(resume.personalDetails.phone) && !/^[+()\-\s0-9]{7,20}$/.test(resume.personalDetails.phone);
   const isValidUrlLike = (value: string) => !value.trim() || /^(https?:\/\/)?([\w-]+\.)+[\w-]{2,}(\/[^\s]*)?$/i.test(value.trim());
@@ -193,7 +207,7 @@ function ResumeBuilder({
   };
 
   const applySuggestion = (issueId: string, suggestionId: string) => {
-    onChange(applyLanguageSuggestion(resume, issueId, suggestionId));
+    onChange(applyLanguageSuggestion({ ...resume, languageQuality: liveLanguageQuality }, issueId, suggestionId));
     showToasts('Language suggestion applied.', 'success');
   };
 
@@ -292,8 +306,40 @@ function ResumeBuilder({
 
   const headingButtonCls = 'inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-[#2A2E37] bg-[#171A21] px-2.5 py-1.5 text-[10px] font-semibold text-zinc-200 transition hover:border-[#4B5D72] hover:bg-[#1A212A]';
 
-  // Language analysis is paused until it is backed by a validated provider result.
-  const renderSectionQualityPanel = (_sectionKey: string) => null;
+  const renderSectionQualityPanel = (sectionKey: string) => {
+    const issues = getSectionIssues(sectionKey).filter(issue => !issue.path.startsWith('sectionConfig.'));
+    if (!issues.length) return null;
+    return (
+      <div className="space-y-2 rounded-xl border border-sky-400/20 bg-sky-950/20 p-3" aria-live="polite">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-sky-200">Writing suggestions</span>
+          <span className="text-[10px] text-zinc-500">Checked after typing pauses</span>
+        </div>
+        {issues.slice(0, 4).map(issue => (
+          <div key={issue.id} className="rounded-lg border border-white/[0.06] bg-[#0F1115] p-2.5 text-[11px]">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-semibold text-zinc-200">{issue.label}</p>
+                <p className="mt-0.5 text-zinc-400">{issue.message}</p>
+              </div>
+              <span className="rounded-full bg-sky-400/10 px-2 py-0.5 text-[9px] font-bold uppercase text-sky-200">{issue.category}</span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {issue.suggestions.slice(0, 1).map(suggestion => (
+                <button key={suggestion.id} type="button" onClick={() => applySuggestion(issue.id, suggestion.id)} className="rounded-md bg-[#72DFCA] px-2.5 py-1 text-[10px] font-bold text-[#08110F] hover:bg-[#91E8D7]">
+                  Apply
+                </button>
+              ))}
+              <button type="button" onClick={() => setIgnoredLanguageIssues(current => new Set(current).add(issue.id))} className="rounded-md border border-[#344354] px-2.5 py-1 text-[10px] font-semibold text-zinc-300 hover:bg-[#182231]">
+                Ignore
+              </button>
+            </div>
+          </div>
+        ))}
+        <p className="text-[10px] text-zinc-500">Local checks run first. Optional AI writing help uses quota only when you request it. AI can make mistakes.</p>
+      </div>
+    );
+  };
 
   const updatePersonal = (field: string, val: string) => {
     // Basic validation check

@@ -231,7 +231,7 @@ export const resumeTemplatePlans: Record<TemplateId, ResumeTemplatePlan> = {
     header: 'portfolio',
     entry: 'card',
     skills: 'inline',
-    sectionOrder: ['projects', 'summary', 'experience', 'achievements', 'skills', 'education', 'certifications'],
+    sectionOrder: ['summary', 'projects', 'experience', 'achievements', 'education', 'skills', 'languages', 'certifications'],
     bodyLayout: 'sidebar',
     summaryStyle: 'plain',
     projectEmphasis: 'primary',

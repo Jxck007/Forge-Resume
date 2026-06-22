@@ -45,7 +45,7 @@ const createIssue = (
   message: string,
   replacement?: string
 ): LanguageIssue => {
-  const id = `${node.path}:${category}:${message}`;
+  const id = `${node.path}:${category}:${message}:${node.text}`;
   return {
     id,
     path: node.path,
@@ -182,6 +182,12 @@ const sentenceStyleIssues = (node: TextNode): LanguageIssue[] => {
 
   if (text.length > 80 && !/[.!?]$/.test(text) && !text.includes('\n')) {
     issues.push(createIssue(node, 'grammar', 'low', 'Long sentence should end with punctuation.', `${text}.`));
+  }
+
+  const hasPastTense = /\b(?:led|built|created|managed|improved|reduced|increased|developed|designed|implemented)\b/i.test(text);
+  const hasPresentTense = /\b(?:lead|build|create|manage|improve|reduce|increase|develop|design|implement)\b/i.test(text);
+  if (hasPastTense && hasPresentTense) {
+    issues.push(createIssue(node, 'consistency', 'low', 'Check tense consistency within this entry.'));
   }
 
   return issues;

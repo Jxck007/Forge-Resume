@@ -15,10 +15,32 @@ export const TEMPLATE_LABELS: Record<TemplateId, string> = {
 export const TEMPLATE_IDS = Object.keys(TEMPLATE_LABELS) as TemplateId[];
 
 export function TemplateSample({ templateId }: { templateId: TemplateId }) {
+  if (templateId === 'designer') {
+    return (
+      <div className="aspect-[1/1.28] overflow-hidden rounded-md bg-[#f4f3ef] text-left text-slate-800 shadow-sm" aria-hidden="true">
+        <div className="bg-[#17202a] px-3 py-3 text-[#f8f6f1]">
+          <div className="text-[9px] font-black leading-none tracking-wide">JOHN DOE</div>
+          <div className="mt-1 text-[4px] uppercase tracking-widest text-[#c6a36f]">Senior Product Designer</div>
+        </div>
+        <div className="grid h-full grid-cols-[32%_1fr] gap-2 p-2">
+          <div className="border-t-2 border-[#9b7a4c] bg-[#e5e7e6] p-1.5 text-[4px] leading-tight">
+            <b>CONTACT</b><p className="mt-1">Austin, TX<br />john@example.com</p>
+            <b className="mt-2 block">EDUCATION</b><p className="mt-1">B.S. Design</p>
+            <b className="mt-2 block">SKILLS</b><p className="mt-1">Research<br />Systems<br />Figma</p>
+          </div>
+          <div className="text-[4px] leading-tight">
+            <b className="block text-[5px] uppercase text-[#9b7a4c]">Profile</b><p className="mt-1">Product designer creating clear enterprise experiences.</p>
+            <b className="mt-2 block text-[5px] uppercase text-[#9b7a4c]">Selected Projects</b><p className="mt-1 font-semibold">Analytics Platform</p><p>Led research and design delivery.</p>
+            <b className="mt-2 block text-[5px] uppercase text-[#9b7a4c]">Experience</b><p className="mt-1 font-semibold">Senior Product Designer</p><p>Northstar Labs</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
   const accent = templateId === 'corporate' || templateId === 'classic' || templateId === 'atsFriendly'
-    ? 'bg-zinc-700' : templateId === 'creative' || templateId === 'designer'
+    ? 'bg-zinc-700' : templateId === 'creative'
       ? 'bg-sky-500' : templateId === 'executive' ? 'bg-amber-700' : 'bg-emerald-500';
-  const hasRail = ['modern', 'creative', 'designer', 'dataAnalyst'].includes(templateId);
+  const hasRail = ['modern', 'creative', 'dataAnalyst'].includes(templateId);
 
   return (
     <div className="aspect-[1/1.28] overflow-hidden rounded-md bg-white p-3 text-left text-slate-800 shadow-sm" aria-hidden="true">
