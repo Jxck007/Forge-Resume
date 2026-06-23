@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ResumeData,
   ExperienceEntry,
@@ -142,11 +142,16 @@ function ResumeBuilder({
     };
   }, []);
 
+  // Live grammar/writing checker per section with debounce
+  const grammarDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    const timer = window.setTimeout(() => {
+    if (grammarDebounceRef.current) clearTimeout(grammarDebounceRef.current);
+    grammarDebounceRef.current = setTimeout(() => {
       if (mountedRef.current) setLiveLanguageQuality(analyzeResumeLanguageQuality(resume));
-    }, 1_000);
-    return () => window.clearTimeout(timer);
+    }, 900);
+    return () => {
+      if (grammarDebounceRef.current) clearTimeout(grammarDebounceRef.current);
+    };
   }, [resume]);
 
   const toggleSection = (sec: string) => {
@@ -160,12 +165,17 @@ function ResumeBuilder({
     { ...resume, languageQuality: liveLanguageQuality },
     sectionKey
   ).filter(issue => !ignoredLanguageIssues.has(issue.id));
-  const emailInvalid = Boolean(resume.personalDetails.email) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resume.personalDetails.email);
-  const phoneInvalid = Boolean(resume.personalDetails.phone) && !/^[+()\-\s0-9]{7,20}$/.test(resume.personalDetails.phone);
-  const isValidUrlLike = (value: string) => !value.trim() || /^(https?:\/\/)?([\w-]+\.)+[\w-]{2,}(\/[^\s]*)?$/i.test(value.trim());
-  const linkedInInvalid = Boolean(resume.personalDetails.linkedin) && !isValidUrlLike(resume.personalDetails.linkedin);
-  const githubInvalid = Boolean(resume.personalDetails.github) && !isValidUrlLike(resume.personalDetails.github);
-  const websiteInvalid = Boolean(resume.personalDetails.website) && !isValidUrlLike(resume.personalDetails.website);
+  const emailInvalid = useMemo(() => Boolean(resume.personalDetails.email) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resume.personalDetails.email), [resume.personalDetails.email]);
+  const phoneInvalid = useMemo(() => Boolean(resume.personalDetails.phone) && !/^[+()\-\s0-9]{7,20}$/.test(resume.personalDetails.phone), [resume.personalDetails.phone]);
+  const isValidUrlLikeFn = useCallback((value: string) => !value.trim() || /^(https?:\/\/)?([\w-]+\.)+[\w-]{2,}(\/[^\s]*)?$/i.test(value.trim()), []);
+  const linkedInInvalid = useMemo(() => Boolean(resume.personalDetails.linkedin) && !isValidUrlLikeFn(resume.personalDetails.linkedin), [resume.personalDetails.linkedin, isValidUrlLikeFn]);
+  const githubInvalid = useMemo(() => Boolean(resume.personalDetails.github) && !isValidUrlLikeFn(resume.personalDetails.github), [resume.personalDetails.github, isValidUrlLikeFn]);
+  const websiteInvalid = useMemo(() => Boolean(resume.personalDetails.website) && !isValidUrlLikeFn(resume.personalDetails.website), [resume.personalDetails.website, isValidUrlLikeFn]);
+  const normalizeExternalUrl = useCallback((value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed || /^https?:\/\//i.test(trimmed)) return trimmed;
+    return `https://${trimmed}`;
+  }, []);
   const normalizeExternalUrl = (value: string) => {
     const trimmed = value.trim();
     if (!trimmed || /^https?:\/\//i.test(trimmed)) return trimmed;

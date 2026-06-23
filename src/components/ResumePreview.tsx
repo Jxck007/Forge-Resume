@@ -8,7 +8,7 @@ import React, {
   useState,
 } from 'react';
 import { pdf } from '@react-pdf/renderer';
-import { AlertTriangle, ChevronDown, Eye, FileDown, Image, Loader2, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Eye, FileDown, FileText, Image, Loader2, X } from 'lucide-react';
 import { ResumeData, TemplateId } from '../types';
 import { VISIBLE_TEMPLATE_IDS } from './TemplateShowcase';
 import ResumePdfDocument, {
@@ -16,7 +16,7 @@ import ResumePdfDocument, {
   SINGLE_PAGE_MAX_COMPACT_LEVEL,
 } from './ResumePdfDocument';
 import ActionMenu from './ActionMenu';
-import { createResumePng, downloadBlob } from '../utils/resumeExport';
+import { createResumeDocx, createResumePng, downloadBlob } from '../utils/resumeExport';
 
 interface ResumePreviewProps {
   resume: ResumeData;
@@ -100,7 +100,7 @@ function ResumePreview({
   showToasts,
 }: ResumePreviewProps) {
   const [exportError, setExportError] = useState<{ message: string } | null>(null);
-  const [exporting, setExporting] = useState<'pdf' | 'image' | null>(null);
+  const [exporting, setExporting] = useState<'pdf' | 'image' | 'docx' | null>(null);
   const isExporting = exporting !== null;
   const [isPreviewRendering, setIsPreviewRendering] = useState(false);
   const [fitMode, setFitMode] = useState<FitMode>('single');
@@ -345,6 +345,25 @@ function ResumePreview({
     }
   };
 
+  const handleDownloadDocx = async () => {
+    if (isExporting) return;
+    setExportError(null);
+    setExporting('docx');
+    showToasts('Generating DOCX document...', 'info');
+    try {
+      const blob = await createResumeDocx(resume);
+      const safeName = resume.personalDetails.fullName?.replace(/[^a-z0-9]/gi, '_') || 'Resume';
+      downloadBlob(blob, `${safeName}.docx`);
+      showToasts('DOCX downloaded successfully.', 'success');
+    } catch {
+      const message = 'Forge could not generate the DOCX safely. Please try again.';
+      setExportError({ message });
+      showToasts(message, 'error');
+    } finally {
+      setExporting(null);
+    }
+  };
+
   const handleDownloadImage = async () => {
     if (isExporting) return;
     setExportError(null);
@@ -445,6 +464,7 @@ function ResumePreview({
                 triggerContent={<>{isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}<span>{exporting ? `Exporting ${exporting.toUpperCase()}…` : 'Export'}</span><ChevronDown className="h-3.5 w-3.5" /></>}
                 items={[
                   { label: 'Export PDF', icon: <FileDown className="h-4 w-4" />, onSelect: handleDownloadPDF, disabled: isExporting || !hasPreview || singlePageBlocked },
+                  { label: 'Export DOCX', icon: <FileText className="h-4 w-4" />, onSelect: handleDownloadDocx, disabled: isExporting },
                   { label: 'Export Image', icon: <Image className="h-4 w-4" />, onSelect: handleDownloadImage, disabled: isExporting || !hasPreview || singlePageBlocked },
                 ]}
               />

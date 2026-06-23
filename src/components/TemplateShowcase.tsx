@@ -15,7 +15,7 @@ export const TEMPLATE_LABELS: Record<TemplateId, string> = {
 export const TEMPLATE_IDS = Object.keys(TEMPLATE_LABELS) as TemplateId[];
 export const VISIBLE_TEMPLATE_IDS: TemplateId[] = [
   'modern', 'minimal', 'corporate', 'executive', 'creative', 'atsFriendly',
-  'softwareEngineer', 'student', 'startup', 'dataAnalyst', 'classic',
+  'softwareEngineer', 'student', 'startup', 'designer', 'dataAnalyst', 'classic',
 ];
 
 export function TemplateSample({ templateId }: { templateId: TemplateId }) {

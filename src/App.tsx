@@ -28,16 +28,16 @@ import {
 } from './utils/storageKeys';
 import Header from './components/Header';
 import Auth from './components/Auth';
-import Dashboard from './components/Dashboard';
-import ProfileSetup from './components/ProfileSetup';
+const Dashboard = React.lazy(() => import('./components/Dashboard'));
+const ProfileSetup = React.lazy(() => import('./components/ProfileSetup'));
 import { ReviewedImport } from './utils/aiImportQuality';
 import ErrorBoundary from './components/ErrorBoundary';
 import FirebaseSetupWizard from './components/FirebaseSetupWizard';
 import WorkspaceLoadingScreen from './components/WorkspaceLoadingScreen';
 import NotFoundPage from './components/NotFoundPage';
-import OnboardingTour from './components/OnboardingTour';
+const OnboardingTour = React.lazy(() => import('./components/OnboardingTour'));
 import { motion, AnimatePresence } from 'motion/react';
-import { Loader2, CheckCircle2, AlertTriangle, Info } from 'lucide-react';
+import { Loader2, CheckCircle2, AlertTriangle, Info, LayoutDashboard, FileText, Sparkles, Activity, User as UserIcon, Settings2 } from 'lucide-react';
 import { AiSessionProvider, clearAiSessionMemory } from './contexts/AiSessionContext';
 
 const ResumeBuilder = React.lazy(() => import('./components/ResumeBuilder'));
@@ -653,9 +653,9 @@ export default function App() {
   };
 
   const handleParseResumeImport = async (rawText: string): Promise<ReviewedImport<ResumeData>> => {
-    if (!user) throw new Error('You must be signed in to import a resume.');
     void rawText;
-    throw new Error('Assisted import is being upgraded. You can create a resume manually for now.');
+    // Import is handled in Dashboard via the API route using Gemini + local extraction
+    throw new Error('Select a file or paste text in the import dialog.');
   };
 
   const handleSaveResumeImport = async (importedData: Partial<ResumeData>) => {
@@ -784,7 +784,9 @@ export default function App() {
       <main className={user || isGuestMode ? 'min-h-[calc(100vh-4rem)] pb-24 lg:pb-0' : 'min-h-screen'}>
         {user || isGuestMode ? (
           showProfileSetup ? (
-            <ProfileSetup onComplete={handleProfileComplete} userEmail={user?.email || ''} dbConnected={dbConnected} />
+            <React.Suspense fallback={<WorkspaceLoadingScreen kind="workspace" title="Loading profile setup..." description="Preparing your onboarding experience." />}>
+              <ProfileSetup onComplete={handleProfileComplete} userEmail={user?.email || ''} dbConnected={dbConnected} />
+            </React.Suspense>
           ) : (
             <React.Suspense fallback={<WorkspaceLoadingScreen kind={activeTab === 'builder' ? 'editor' : 'workspace'} />}>
             <AnimatePresence mode="popLayout">
@@ -917,55 +919,85 @@ export default function App() {
             )}
 
             {activeTab === 'builder' && !activeResume && workspaceHydrated && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="forge-product-page mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8">
-                <div className="rounded-3xl border border-[#2A2E37] bg-[#171A21] p-6 text-center shadow-2xl shadow-black/20 sm:p-8">
-                  <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-[#2A2E37] bg-[#0F1115] text-emerald-300">
-                    <Loader2 className="h-7 w-7" />
-                  </div>
-                  <h2 className="text-2xl font-bold tracking-tight text-white">No resume selected yet.</h2>
-                  <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-zinc-400">
-                    Create a resume from your profile or start blank, then open it here.
-                  </p>
-                  <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
-                    <button
-                      type="button"
-                      onClick={() => navigateTo('/dashboard', 'dashboard')}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-400 px-5 py-2.5 text-sm font-semibold text-[#08110F] transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200"
-                    >
-                    Back to Dashboard
-                    </button>
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="relative mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8"
+              >
+                {/* Decorative orbs */}
+                <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                  <div className="forge-orb forge-animate-orb-drift absolute -left-16 -top-16 h-56 w-56 rounded-full bg-emerald-500/8" />
+                  <div className="forge-orb forge-animate-orb-drift-2 absolute -bottom-20 -right-12 h-64 w-64 rounded-full bg-indigo-500/8" />
+                </div>
+                <div className="forge-gradient-border relative rounded-3xl">
+                  <div className="rounded-3xl border border-[#2A2E37] bg-[#171A21]/95 p-6 text-center shadow-2xl shadow-black/20 backdrop-blur-xl sm:p-8">
+                    <div className="forge-animate-float mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 ring-1 ring-emerald-500/20">
+                      <Sparkles className="h-7 w-7 text-emerald-300" />
+                    </div>
+                    <div className="forge-animate-gradient mx-auto mb-4 h-1 w-16 rounded-full" />
+                    <h2 className="text-2xl font-bold tracking-tight text-white">Ready to build?</h2>
+                    <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-zinc-400">
+                      Open a resume from your dashboard or create one to start editing here.
+                    </p>
+                    <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
+                      <button
+                        type="button"
+                        onClick={() => navigateTo('/dashboard', 'dashboard')}
+                        className="group inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-400 to-teal-400 px-5 py-2.5 text-sm font-semibold text-[#08110F] shadow-lg shadow-emerald-900/20 transition hover:from-emerald-300 hover:to-teal-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200"
+                      >
+                        <LayoutDashboard className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
+                        Back to Dashboard
+                      </button>
+                    </div>
                   </div>
                 </div>
               </motion.div>
             )}
 
             {atsPausedRoute && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="forge-product-page mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8">
-                <div className="rounded-3xl border border-[#2A2E37] bg-[#171A21] p-6 text-center shadow-2xl shadow-black/20 sm:p-8">
-                  <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-[#2A2E37] bg-[#0F1115] text-emerald-300">
-                    <Info className="h-7 w-7" />
-                  </div>
-                  <h2 className="text-2xl font-bold tracking-tight text-white">Feature temporarily paused</h2>
-                  <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-zinc-400">
-                    We’re rebuilding this feature to make it better. You can continue building and exporting resumes.
-                  </p>
-                  <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
-                    <button
-                      type="button"
-                      onClick={() => navigateTo('/dashboard', 'dashboard')}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-400 px-5 py-2.5 text-sm font-semibold text-[#08110F] transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200"
-                    >
-                      Open Dashboard
-                    </button>
-                    {activeResume && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="relative mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8"
+              >
+                {/* Decorative orbs */}
+                <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                  <div className="forge-orb forge-animate-orb-drift absolute -right-20 -top-16 h-60 w-60 rounded-full bg-indigo-500/8" />
+                  <div className="forge-orb forge-animate-orb-drift-2 absolute -bottom-24 -left-16 h-72 w-72 rounded-full bg-emerald-500/8" />
+                </div>
+                <div className="forge-gradient-border relative rounded-3xl">
+                  <div className="rounded-3xl border border-[#2A2E37] bg-[#171A21]/95 p-6 text-center shadow-2xl shadow-black/20 backdrop-blur-xl sm:p-8">
+                    <div className="forge-animate-float mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 ring-1 ring-emerald-500/20 forge-animate-pulse-glow">
+                      <Activity className="h-7 w-7 text-emerald-300" />
+                    </div>
+                    <div className="forge-animate-gradient mx-auto mb-4 h-1 w-20 rounded-full" />
+                    <h2 className="text-2xl font-bold tracking-tight text-white">ATS Analyzer — Coming Soon</h2>
+                    <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-zinc-400">
+                      We&apos;re rebuilding ATS analysis to be smarter, more transparent, and AI-powered.
+                      For now, keep building and exporting your resumes — your content is always ATS-safe.
+                    </p>
+                    <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
                       <button
                         type="button"
-                        onClick={() => navigateTo('/builder', 'builder')}
-                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#2A2E37] bg-[#0F1115] px-5 py-2.5 text-sm font-semibold text-zinc-200 transition hover:border-zinc-600 hover:bg-[#131722] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200"
+                        onClick={() => navigateTo('/dashboard', 'dashboard')}
+                        className="group inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-400 to-teal-400 px-5 py-2.5 text-sm font-semibold text-[#08110F] shadow-lg shadow-emerald-900/20 transition hover:from-emerald-300 hover:to-teal-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200"
                       >
-                        Open Resume Builder
+                        <LayoutDashboard className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
+                        Open Dashboard
                       </button>
-                    )}
+                      {activeResume && (
+                        <button
+                          type="button"
+                          onClick={() => navigateTo('/builder', 'builder')}
+                          className="group inline-flex items-center justify-center gap-2 rounded-xl border border-[#2A2E37] bg-[#0F1115]/80 px-5 py-2.5 text-sm font-semibold text-zinc-200 transition hover:border-zinc-600 hover:bg-[#131722] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200"
+                        >
+                          <FileText className="h-4 w-4" />
+                          Open Resume Builder
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </motion.div>
@@ -973,7 +1005,7 @@ export default function App() {
 
             {activeTab === 'profile' && (
               user ? (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
                   <MyProfile
                     user={user}
                     showToasts={triggerToast}
@@ -984,22 +1016,44 @@ export default function App() {
                   />
                 </motion.div>
               ) : (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="forge-product-page mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8">
-                  <div className="rounded-3xl border border-[#2A2E37] bg-[#171A21] p-6 text-center shadow-2xl shadow-black/20 sm:p-8">
-                    <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-[#2A2E37] bg-[#0F1115] text-emerald-300">
-                      <Info className="h-7 w-7" />
-                    </div>
-                    <h2 className="text-2xl font-bold tracking-tight text-white">{guestRestrictedTitle}</h2>
-                    <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-zinc-400">
-                      Guest mode keeps your resume local. Sign in to sync profile details and account settings.
-                    </p>
-                    <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
-                      <button type="button" onClick={returnToAuth} className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#2A2E37] bg-[#0F1115] px-5 py-2.5 text-sm font-semibold text-zinc-200 transition hover:border-zinc-600 hover:bg-[#131722] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200">
-                        Sign In
-                      </button>
-                      <button type="button" onClick={() => navigateTo('/dashboard', 'dashboard')} className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-400 px-5 py-2.5 text-sm font-semibold text-[#08110F] transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200">
-                        Open Dashboard
-                      </button>
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="relative mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8"
+                >
+                  {/* Decorative orbs */}
+                  <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                    <div className="forge-orb forge-animate-orb-drift absolute -left-16 -top-12 h-52 w-52 rounded-full bg-emerald-500/8" />
+                    <div className="forge-orb forge-animate-orb-drift-2 absolute -bottom-16 -right-12 h-60 w-60 rounded-full bg-indigo-500/8" />
+                  </div>
+                  <div className="forge-gradient-border relative rounded-3xl">
+                    <div className="rounded-3xl border border-[#2A2E37] bg-[#171A21]/95 p-6 text-center shadow-2xl shadow-black/20 backdrop-blur-xl sm:p-8">
+                      <div className="forge-animate-float mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 ring-1 ring-emerald-500/20">
+                        <UserIcon className="h-7 w-7 text-emerald-300" />
+                      </div>
+                      <div className="forge-animate-gradient mx-auto mb-4 h-1 w-16 rounded-full" />
+                      <h2 className="text-2xl font-bold tracking-tight text-white">{guestRestrictedTitle}</h2>
+                      <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-zinc-400">
+                        Guest mode keeps your resume local. Sign in to sync profile details and account settings.
+                      </p>
+                      <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
+                        <button
+                          type="button"
+                          onClick={returnToAuth}
+                          className="group inline-flex items-center justify-center gap-2 rounded-xl border border-[#2A2E37] bg-[#0F1115]/80 px-5 py-2.5 text-sm font-semibold text-zinc-200 shadow-lg shadow-black/10 transition hover:border-zinc-600 hover:bg-[#131722] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200"
+                        >
+                          Sign In
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => navigateTo('/dashboard', 'dashboard')}
+                          className="group inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-400 to-teal-400 px-5 py-2.5 text-sm font-semibold text-[#08110F] shadow-lg shadow-emerald-900/20 transition hover:from-emerald-300 hover:to-teal-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200"
+                        >
+                          <LayoutDashboard className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
+                          Open Dashboard
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </motion.div>
@@ -1008,7 +1062,7 @@ export default function App() {
 
             {activeTab === 'settings' && (
               user ? (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
                   <Settings
                     user={user}
                     showToasts={triggerToast}
@@ -1019,22 +1073,44 @@ export default function App() {
                   />
                 </motion.div>
               ) : (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="forge-product-page mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8">
-                  <div className="rounded-3xl border border-[#2A2E37] bg-[#171A21] p-6 text-center shadow-2xl shadow-black/20 sm:p-8">
-                    <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-[#2A2E37] bg-[#0F1115] text-emerald-300">
-                      <Info className="h-7 w-7" />
-                    </div>
-                    <h2 className="text-2xl font-bold tracking-tight text-white">{guestRestrictedTitle}</h2>
-                    <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-zinc-400">
-                      Guest mode keeps your resume local. Sign in to sync profile details and account settings.
-                    </p>
-                    <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
-                      <button type="button" onClick={returnToAuth} className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#2A2E37] bg-[#0F1115] px-5 py-2.5 text-sm font-semibold text-zinc-200 transition hover:border-zinc-600 hover:bg-[#131722] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200">
-                        Sign In
-                      </button>
-                      <button type="button" onClick={() => navigateTo('/dashboard', 'dashboard')} className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-400 px-5 py-2.5 text-sm font-semibold text-[#08110F] transition hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200">
-                        Open Dashboard
-                      </button>
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="relative mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8"
+                >
+                  {/* Decorative orbs */}
+                  <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                    <div className="forge-orb forge-animate-orb-drift absolute -left-16 -top-12 h-52 w-52 rounded-full bg-emerald-500/8" />
+                    <div className="forge-orb forge-animate-orb-drift-2 absolute -bottom-16 -right-12 h-60 w-60 rounded-full bg-cyan-500/8" />
+                  </div>
+                  <div className="forge-gradient-border relative rounded-3xl">
+                    <div className="rounded-3xl border border-[#2A2E37] bg-[#171A21]/95 p-6 text-center shadow-2xl shadow-black/20 backdrop-blur-xl sm:p-8">
+                      <div className="forge-animate-float mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 ring-1 ring-emerald-500/20">
+                        <Settings2 className="h-7 w-7 text-emerald-300" />
+                      </div>
+                      <div className="forge-animate-gradient mx-auto mb-4 h-1 w-16 rounded-full" />
+                      <h2 className="text-2xl font-bold tracking-tight text-white">{guestRestrictedTitle}</h2>
+                      <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-zinc-400">
+                        Guest mode keeps your resume local. Sign in to sync profile details and account settings.
+                      </p>
+                      <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
+                        <button
+                          type="button"
+                          onClick={returnToAuth}
+                          className="group inline-flex items-center justify-center gap-2 rounded-xl border border-[#2A2E37] bg-[#0F1115]/80 px-5 py-2.5 text-sm font-semibold text-zinc-200 shadow-lg shadow-black/10 transition hover:border-zinc-600 hover:bg-[#131722] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200"
+                        >
+                          Sign In
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => navigateTo('/dashboard', 'dashboard')}
+                          className="group inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-400 to-teal-400 px-5 py-2.5 text-sm font-semibold text-[#08110F] shadow-lg shadow-emerald-900/20 transition hover:from-emerald-300 hover:to-teal-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200"
+                        >
+                          <LayoutDashboard className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
+                          Open Dashboard
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </motion.div>
@@ -1048,7 +1124,11 @@ export default function App() {
       )}
       </main>
 
-      {tutorialOpen && (user || isGuestMode) && <OnboardingTour context={tutorialContext} onComplete={completeTutorial} />}
+      {tutorialOpen && (user || isGuestMode) && (
+        <React.Suspense fallback={null}>
+          <OnboardingTour context={tutorialContext} onComplete={completeTutorial} />
+        </React.Suspense>
+      )}
 
       {/* TOASTER ALERTS DRAWER */}
       <div className="no-print fixed bottom-6 right-6 z-50 flex flex-col gap-2.5 max-w-sm pointer-events-none">
