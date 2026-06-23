@@ -22,12 +22,23 @@ import {
   getEducationScoreType,
   normalizeEducationScore,
 } from '../utils/educationScore';
-import { ReviewedImport } from '../utils/aiImportQuality';
+import { assessProfileImport, ReviewedImport } from '../utils/aiImportQuality';
 import {
   readStorageJson,
+  getOrCreateForgeDeviceId,
   storageKeys,
   writeStorageJson,
 } from '../utils/storageKeys';
+import { useAiSession } from '../contexts/AiSessionContext';
+import {
+  USER_IMPORT_ACCEPT,
+  inferImportMode,
+  prepareDocxImportPayload,
+  prepareImageForImport,
+  preparePdfImportPayload,
+  ResumeImportError,
+  validateImportFile,
+} from '../utils/resumeImport';
 import {
   User as UserIcon,
   Mail,
@@ -55,8 +66,6 @@ import {
   FolderOpen,
   Trophy,
   Upload,
-  FileText,
-  Image as ImageIcon,
   ClipboardList,
   X,
   ChevronDown,
@@ -317,11 +326,13 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
 
   // AI Import states
   const [importMode, setImportMode] = useState<'pdf' | 'docx' | 'image' | 'text' | null>(null);
+  const [importFile, setImportFile] = useState<File | null>(null);
   const [importText, setImportText] = useState('');
   const [importParsing, setImportParsing] = useState(false);
   const [reviewData, setReviewData] = useState<ReviewedImport<ProfileData> | null>(null);
   const [importStatus, setImportStatus] = useState('');
   const importInProgressRef = useRef(false);
+  const { state: aiState, refreshFreeStatus } = useAiSession();
 
   // Local profile state
   const [localProfile, setLocalProfile] = useState<ProfileData>(
@@ -555,94 +566,66 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
   const removeCustomItem = (sectionId: string, itemId: string) => setLocalProfile(p => ({ ...p, customSections: (p.customSections || []).map(s => s.id === sectionId ? { ...s, items: s.items.filter(i => i.id !== itemId) } : s) }));
 
   // ── AI IMPORT ──
-  const isAiConfigured = false;
+  const isAiConfigured = aiState.freeBetaAvailable === true;
 
-  const extractTextFromPdf = async (file: File): Promise<string> => {
-    const pdfjsLib = await import('pdfjs-dist');
-    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-      'pdfjs-dist/build/pdf.worker.min.mjs',
-      import.meta.url
-    ).href;
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let text = '';
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      text += content.items.map((item: any) => item.str).join(' ') + '\n';
-    }
-    return text;
-  };
-
-  const extractTextFromDocx = async (file: File): Promise<string> => {
-    const mammoth = (await import('mammoth')).default;
-    const arrayBuffer = await file.arrayBuffer();
-    const result = await mammoth.extractRawText({ arrayBuffer });
-    return result.value;
-  };
-
-  const extractTextFromImage = async (file: File): Promise<string> => {
-    const { createWorker } = await import('tesseract.js');
-    const worker = await createWorker('eng');
-    const { data: { text } } = await worker.recognize(file);
-    await worker.terminate();
-    return text;
-  };
-
-  const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !importMode || importMode === 'text') return;
-    if (fileInputRef.current) fileInputRef.current.value = '';
-
+  const handleProfileImport = async () => {
     if (importInProgressRef.current) {
       showToasts('Import already in progress.', 'info');
       return;
     }
-    if (!isAiConfigured) {
-      showToasts('Assisted import is being upgraded. You can update your profile manually for now.', 'info');
-      return;
-    }
+    if (!importFile && !importText.trim()) { showToasts('Paste resume text or choose a file first.', 'info'); return; }
+    if (!isAiConfigured) { showToasts('Forge Free AI import is unavailable right now.', 'info'); return; }
 
     importInProgressRef.current = true;
     setImportParsing(true);
-    setImportStatus('Extracting resume text...');
-    showToasts('Extracting text from file...', 'info');
+    setImportStatus('Reading resume…');
     try {
-      let rawText = '';
-      if (importMode === 'pdf') rawText = await extractTextFromPdf(file);
-      else if (importMode === 'docx') rawText = await extractTextFromDocx(file);
-      else if (importMode === 'image') rawText = await extractTextFromImage(file);
-
-      if (!rawText.trim()) {
-        showToasts('Could not extract text from the file. Try pasting manually.', 'error');
-        return;
+      let rawText = importText.trim();
+      let requestBody: Record<string, unknown>;
+      if (!importFile) {
+        requestBody = { sourceType: 'text', text: rawText, templateId: 'modern' };
+      } else {
+        const mode = inferImportMode(importFile);
+        if (!mode) throw new ResumeImportError('Choose a supported resume file.', 'unsupported_file');
+        const validationError = validateImportFile(importFile, mode);
+        if (validationError) throw new ResumeImportError(validationError, 'invalid_file');
+        setImportStatus('Extracting text and links…');
+        if (mode === 'image') {
+          const image = await prepareImageForImport(importFile);
+          requestBody = { sourceType: 'image', imageBase64: image.base64, mimeType: image.mimeType, templateId: 'modern' };
+          rawText = '';
+        } else if (mode === 'pdf') {
+          const prepared = await preparePdfImportPayload(importFile);
+          if (prepared.sourceType === 'pdf_hybrid') {
+            requestBody = { sourceType: 'pdf_hybrid', text: prepared.text, imageBase64: prepared.imageBase64, mimeType: prepared.mimeType, templateId: 'modern' };
+            rawText = prepared.text;
+          } else if ('text' in prepared) {
+            requestBody = { sourceType: 'pdf_text', text: prepared.text, templateId: 'modern' };
+            rawText = prepared.text;
+          } else {
+            requestBody = { sourceType: 'image', imageBase64: prepared.imageBase64, mimeType: prepared.mimeType, templateId: 'modern' };
+            rawText = '';
+          }
+        } else {
+          const prepared = await prepareDocxImportPayload(importFile);
+          if (!('text' in prepared)) throw new ResumeImportError('This DOCX could not be extracted.', 'docx_invalid');
+          requestBody = { sourceType: 'docx_text', text: prepared.text, templateId: 'modern' };
+          rawText = prepared.text;
+        }
       }
-
-      showToasts('Profile import is temporarily paused. Update your profile manually for now.', 'info');
-    } catch {
-      showToasts('Assisted import is currently unavailable.', 'error');
-    } finally {
-      importInProgressRef.current = false;
-      setImportParsing(false);
-    }
-  };
-
-  const handleTextImport = async () => {
-    if (importInProgressRef.current) {
-      showToasts('Import already in progress.', 'info');
-      return;
-    }
-    if (!importText.trim()) { showToasts('Please paste some resume text first.', 'info'); return; }
-    if (!isAiConfigured) { showToasts('Assisted import is being upgraded. You can update your profile manually for now.', 'info'); return; }
-
-    importInProgressRef.current = true;
-    setImportParsing(true);
-    setImportStatus('Verifying extracted information...');
-    showToasts('Profile import is temporarily paused. Update your profile manually for now.', 'info');
-    try {
-      return;
-    } catch {
-      showToasts('Assisted import is currently unavailable.', 'error');
+      setImportStatus('Gemini is structuring profile fields…');
+      const response = await fetch('/api/ai/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forge-Device': getOrCreateForgeDeviceId() },
+        body: JSON.stringify(requestBody),
+      });
+      const payload = await response.json().catch(() => null) as null | { ok?: boolean; resume?: unknown; message?: string };
+      if (aiState.mode === 'free') await refreshFreeStatus();
+      if (!response.ok || !payload?.ok || !payload.resume) throw new ResumeImportError(payload?.message || 'Profile import could not be completed.', 'import_failed');
+      setReviewData(assessProfileImport(payload.resume, rawText || JSON.stringify(payload.resume)));
+      setImportStatus('Ready for review');
+    } catch (error) {
+      showToasts(error instanceof ResumeImportError ? error.message : 'Profile import could not be completed safely.', 'error');
     } finally {
       importInProgressRef.current = false;
       setImportParsing(false);
@@ -681,6 +664,7 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
     });
     setReviewData(null);
     setImportMode(null);
+    setImportFile(null);
     setImportText('');
     showToasts('AI data merged into profile! Review and click "Sync Profile" to save.', 'success');
   };
@@ -722,8 +706,12 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
         ref={fileInputRef}
         type="file"
         className="hidden"
-        accept={importMode === 'pdf' ? '.pdf' : importMode === 'docx' ? '.docx,.doc' : 'image/*'}
-        onChange={handleFileImport}
+        accept={USER_IMPORT_ACCEPT}
+        onChange={event => {
+          const file = event.target.files?.[0] || null;
+          setImportFile(file);
+          setImportMode(file ? inferImportMode(file) : 'text');
+        }}
       />
 
       {/* ── COVER HEADER ── */}
@@ -873,84 +861,17 @@ export default function MyProfile({ user, showToasts, profile, onProfileUpdate, 
           <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-5 shadow-sm space-y-4">
             <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
               <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
-              Resume Import
+              Resume Import (Paused)
             </h4>
 
-            {!isAiConfigured && (
-              <div className="flex items-start gap-2 text-[11px] text-amber-400 bg-amber-950/15 border border-amber-900/30 p-3 rounded-xl font-medium leading-relaxed">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                <span>Assisted import is being upgraded. You can update your profile manually for now.</span>
-              </div>
-            )}
-
-            <p className="text-[11px] text-zinc-500 leading-relaxed">Profile import is temporarily paused while the assisted import boundary is rebuilt.</p>
-
-            {/* Import method selector */}
-            <div className="grid grid-cols-2 gap-2">
-              {[
-                { id: 'pdf', label: 'PDF', icon: FileText, accept: '.pdf' },
-                { id: 'docx', label: 'DOCX', icon: FileDown, accept: '.docx,.doc' },
-                { id: 'image', label: 'Image', icon: ImageIcon, accept: 'image/*' },
-                { id: 'text', label: 'Paste Text', icon: ClipboardList, accept: '' },
-              ].map(method => (
-                <button
-                  key={method.id}
-                  onClick={() => {
-                    setImportMode(method.id as any);
-                    if (method.id !== 'text' && fileInputRef.current) {
-                      fileInputRef.current.accept = method.accept;
-                      fileInputRef.current.click();
-                    }
-                  }}
-                  disabled={importParsing || !isAiConfigured}
-                  className={`flex flex-col items-center gap-1.5 p-3 rounded-xl border text-[11px] font-bold transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                    importMode === method.id
-                      ? 'border-indigo-600 bg-indigo-950/30 text-indigo-300'
-                      : 'border-zinc-700 bg-zinc-800/30 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'
-                  }`}
-                >
-                  <method.icon className="h-4 w-4" />
-                  {method.label}
-                </button>
-              ))}
+            <div className="rounded-2xl border border-zinc-800/70 bg-[#0F1115] p-4 text-sm text-zinc-300">
+              <p className="font-semibold text-white">Assisted profile import is temporarily paused.</p>
+              <p className="mt-2 text-xs text-zinc-400 leading-relaxed">
+                We are rebuilding the import boundary to make parsing deeper, more accurate, and link-aware. Update your profile manually for now.
+              </p>
             </div>
 
-            {/* Paste text mode */}
-            <AnimatePresence>
-              {importMode === 'text' && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="space-y-2 overflow-hidden"
-                >
-                  <textarea
-                    value={importText}
-                    onChange={e => setImportText(e.target.value)}
-                    disabled={importParsing}
-                    rows={6}
-                    placeholder="Paste your resume text here..."
-                    className="w-full p-3 bg-zinc-900 border border-zinc-700 rounded-xl text-xs text-zinc-300 font-mono focus:border-indigo-500 outline-none resize-none leading-relaxed placeholder:text-zinc-600"
-                  />
-                  <div className="flex gap-2">
-                    <button disabled={importParsing} onClick={() => { setImportMode(null); setImportText(''); }} className="flex-1 py-2 text-xs font-bold text-zinc-400 border border-zinc-700 rounded-xl hover:bg-zinc-800 transition cursor-pointer disabled:cursor-not-allowed disabled:opacity-40">Cancel</button>
-                    <button
-                      onClick={handleTextImport}
-                      disabled={importParsing || !importText.trim()}
-                      className="flex-1 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1"
-                    >
-                      {importParsing ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />{importStatus}</> : <><Sparkles className="h-3.5 w-3.5" />Review import</>}
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {importParsing && (
-              <div className="flex items-center gap-2 rounded-xl border border-indigo-900/30 bg-indigo-950/20 p-3 text-xs font-semibold text-indigo-300" role="status" aria-live="polite">
-                <Loader2 className="h-4 w-4 shrink-0 animate-spin" />{importStatus}
-              </div>
-            )}
+            <p className="text-[11px] text-zinc-500 leading-relaxed">Profile import will prioritize Gemini and preserve embedded links from PDF and DOCX when it returns.</p>
           </div>
         </div>
 

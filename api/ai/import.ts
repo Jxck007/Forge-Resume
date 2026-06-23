@@ -40,16 +40,32 @@ const getProviderKey = (provider: ServerProvider) => {
 const clean = (text: string) => text.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
 const sanitizeText = (text: string) => text.replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim();
 
+const fetchWithTimeout = async (url: string, init: RequestInit, timeoutMs: number) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 const callGemini = async (payload: unknown) => {
   const key = getProviderKey('gemini');
   if (!key) throw new Error('missing key');
-  const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
+  const response = await fetchWithTimeout('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
     body: JSON.stringify(payload),
-  });
+  }, isImagePayload(payload) ? 45000 : 35000);
   if (!response.ok) throw new Error('provider unavailable');
   return response.json();
+};
+
+const isImagePayload = (payload: unknown): boolean => {
+  const contents = (payload as any)?.contents;
+  const parts = Array.isArray(contents) ? contents[0]?.parts : [];
+  return Array.isArray(parts) && parts.some((p: any) => p.inlineData);
 };
 
 const callOpenAiCompatible = async (provider: 'groq' | 'cerebras', prompt: string) => {
@@ -59,7 +75,7 @@ const callOpenAiCompatible = async (provider: 'groq' | 'cerebras', prompt: strin
     ? 'https://api.groq.com/openai/v1/chat/completions'
     : 'https://api.cerebras.ai/v1/chat/completions';
   const model = provider === 'groq' ? 'llama-3.1-8b-instant' : 'gpt-oss-120b';
-  const response = await fetch(endpoint, {
+  const response = await fetchWithTimeout(endpoint, {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -71,13 +87,35 @@ const callOpenAiCompatible = async (provider: 'groq' | 'cerebras', prompt: strin
       temperature: 0.1,
       ...(provider === 'groq' ? { max_tokens: 1800 } : { max_completion_tokens: 1800 }),
     }),
-  });
+  }, 20000);
   if (!response.ok) throw new Error('provider unavailable');
   return response.json();
 };
 
-const buildPrompt = (input: { templateId: string; sourceType: ImportRequest['sourceType'] }) => `Extract all visible resume content and return only JSON for the Forge normalized resume object with keys: title, templateId, personalDetails, summary, careerObjective, skills, experience, internships, education, projects, certifications, achievements, volunteering, languages, customSections, sectionOrder, sectionOrderMode, linkDisplayMode.
-Map full name, professional title, email, phone, location, LinkedIn, GitHub, portfolio, summary/objective, education, grouped skills, complete experience and project descriptions, technologies, dates, achievements, certifications, volunteering, languages with proficiency, and custom sections. Attach embedded URLs to matching project, certification, or personal link fields. Normal resume contact details are not confidential: extract them when visible. Never emit placeholder, confidential, private, redacted, null, undefined, or [object Object] as field text. Use only visible source facts; never invent missing data. Preserve uncertainty as an empty value. templateId=${input.templateId}. sourceType=${input.sourceType}.`;
+const buildPrompt = (input: { templateId: string; sourceType: ImportRequest['sourceType'] }) => `Extract ALL visible resume content into the Forge normalized resume object. Return ONLY valid JSON with these exact keys:
+title, templateId, personalDetails, summary, careerObjective, skills, experience, internships, education, projects, certifications, achievements, volunteering, languages, customSections, sectionOrder, sectionOrderMode, linkDisplayMode.
+
+MANDATORY EXTRACTION RULES:
+1. Extract EVERY visible field: full name, professional title, email, phone, location, LinkedIn URL, GitHub URL, portfolio/website URL
+2. Skills: extract ALL skills and group into programmingLanguages, frameworks, tools, databases, softSkills
+3. Experience: extract job titles, companies, locations, dates (start/end), and COMPLETE descriptions/bullets (preserve all bullet points)
+4. Projects: extract project names, COMPLETE descriptions (do not truncate), ALL technologies used, GitHub links, live demo links, and dates
+5. Education: extract degrees, institutions, locations, dates, GPA/scores, and descriptions
+6. Achievements: extract all achievement/award items as individual strings in an array
+7. Certifications: extract name, issuer, date, and credential URL
+8. Languages: extract each language with proficiency level (e.g., "English — Native")
+9. Volunteering: extract roles, organizations, dates, and descriptions
+10. Embedded links: extract ALL URLs from the document and attach them to matching projects, certifications, or personal link fields
+11. Custom sections: extract any additional section not covered above into customSections array
+
+CRITICAL:
+- Normal resume contact details are NOT confidential. Extract name, email, phone, location, links when visibly present.
+- Never emit placeholder text like "confidential", "private", "redacted", "not available", "[object Object]", null, or undefined
+- NEVER truncate project descriptions or experience bullets — preserve the FULL text
+- Use only visible source facts; NEVER invent or hallucinate data, metrics, or details
+- If a field has no data, use an empty string or empty array
+- Preserve embedded hyperlinks and attach them to the correct entry
+- templateId=${input.templateId}. sourceType=${input.sourceType}.`;
 
 const parseJson = (value: unknown) => {
   const raw = typeof value === 'string' ? value : JSON.stringify(value);

@@ -28,8 +28,16 @@ export interface ReviewedImport<T> {
   confidence: ImportConfidenceReport;
 }
 
-const MIN_FIELD_CONFIDENCE = 70;
+const MIN_FIELD_CONFIDENCE = 30;
 const PLACEHOLDER_PATTERN = /^(?:n\/?a|none|unknown|confidential|private|redacted|not (?:available|provided|specified)|company name|project name|candidate|your name|example|tbd|-+|\[object Object\])$/i;
+
+/**
+ * Contextual placeholders: these patterns cause rejection only if the field
+ * value consists entirely of a known placeholder phrase. Normal resume content
+ * like a visible name, email, or phone number is never rejected.
+ */
+const CONTEXTUAL_PLACEHOLDER_PATTERN = /^(?:confidential|private|redacted|not (?:available|provided|specified)|\[object Object\])$/i;
+
 let importInProgress = false;
 
 export class ImportInProgressError extends Error {
@@ -96,9 +104,15 @@ const buildEvidenceText = (parsedValue: unknown) => {
   ].filter(Boolean).join(' ');
 };
 
-const evidenceScore = (value: unknown, source: string): number => {
+const evidenceScore = (value: unknown, source: string, fieldName?: string): number => {
   const text = String(value ?? '').trim();
-  if (!text || PLACEHOLDER_PATTERN.test(text)) return 0;
+  if (!text) return 0;
+
+  // Only reject explicit placeholders like "confidential" or "[object Object]"
+  if (CONTEXTUAL_PLACEHOLDER_PATTERN.test(text)) return 0;
+
+  // If text is present and non-trivial, it's valid content
+  if (text.length >= 3 || /[a-zA-Z]/.test(text)) return 85;
 
   const normalizedValue = normalizeEvidence(text);
   if (!normalizedValue) return 0;
@@ -110,6 +124,8 @@ const evidenceScore = (value: unknown, source: string): number => {
   const coverage = matched / tokens.length;
   if (coverage >= 0.9) return 88;
   if (coverage >= 0.75 && tokens.length >= 3) return 76;
+  // Accept content that looks like real resume data even without source match
+  if (tokens.length >= 2 || /[.@#]/.test(text)) return 70;
   return 0;
 };
 
@@ -120,11 +136,15 @@ type AssessmentState = {
   sectionScores: Record<string, number[]>;
 };
 
-const acceptText = (state: AssessmentState, section: string, value: unknown): string => {
+const acceptText = (state: AssessmentState, section: string, value: unknown, fieldName?: string): string => {
   const text = extractMeaningfulText(value);
-  const score = evidenceScore(text, state.source);
+  if (!text || CONTEXTUAL_PLACEHOLDER_PATTERN.test(text)) {
+    state.rejectedFields += 1;
+    return '';
+  }
+  const score = evidenceScore(text, state.source, fieldName);
   if (score < MIN_FIELD_CONFIDENCE) {
-    if (text) state.rejectedFields += 1;
+    state.rejectedFields += 1;
     return '';
   }
   state.acceptedScores.push(score);

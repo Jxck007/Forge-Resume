@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Text,
   View,
+  Link,
 } from '@react-pdf/renderer';
 import {
   ResumeData,
@@ -308,13 +309,13 @@ const PROFILES: Record<TemplateId, PdfTemplateProfile> = {
     specialty: 'startup',
   },
   designer: {
-    accent: '#9b7a4c',
-    accentSoft: '#f1f0ed',
-    text: '#17202a',
-    muted: '#59636d',
-    border: '#c7c9c7',
-    headerBackground: '#17202a',
-    headerText: '#f8f6f1',
+    accent: '#6c5ce7',
+    accentSoft: '#f0edff',
+    text: '#1a1a2e',
+    muted: '#6c6c8a',
+    border: '#d0d0e0',
+    headerBackground: '#1a1a2e',
+    headerText: '#ffffff',
     fontFamily: 'Inter',
     displayFontFamily: 'Inter',
     headerLayout: 'band',
@@ -323,8 +324,8 @@ const PROFILES: Record<TemplateId, PdfTemplateProfile> = {
     skillsLayout: 'rows',
     dense: true,
     projectEmphasis: true,
-    nameScale: 1.18,
-    sectionScale: 0.94,
+    nameScale: 1.22,
+    sectionScale: 0.92,
     bodyLayout: 'portfolio',
     photoPolicy: 'optional',
   },
@@ -909,6 +910,18 @@ const buildStyles = (
       width: '69%',
       paddingLeft: 2 * columnFactor,
     },
+    designerContact: {
+      marginBottom: sectionGap,
+      paddingBottom: 5 * sidebarFactor,
+      borderBottomWidth: 0.7,
+      borderBottomColor: profile.border,
+    },
+    designerContactLine: {
+      marginTop: 2,
+      color: profile.muted,
+      fontSize: resumeTypography.metadata,
+      lineHeight: 1.25,
+    },
     executiveSummary: {
       marginBottom: sectionGap,
       paddingTop: 7 * summaryFactor,
@@ -1206,6 +1219,21 @@ function ResumePdfDocument({
     return (
       <View style={styles.bodyColumns}>
         <View style={styles.portfolioSidebar}>
+          {templateId === 'designer' && (
+            <View style={styles.designerContact} wrap={false}>
+              <Text style={styles.sectionHeading}>Contact</Text>
+              {[details.email, details.phone, details.location].filter(Boolean).map(value => (
+                <Text key={value} style={styles.designerContactLine}>{value}</Text>
+              ))}
+              {[
+                ['LinkedIn', details.linkedin],
+                ['GitHub', details.github],
+                ['Portfolio', details.website],
+              ].filter(([, value]) => Boolean(value)).map(([label, value]) => (
+                <Link key={label} src={/^https?:\/\//i.test(value) ? value : `https://${value}`} style={styles.designerContactLine}>{label}</Link>
+              ))}
+            </View>
+          )}
           {sidebarOrder.map((sectionId, index) =>
             renderSection(sectionId, index === sidebarOrder.length - 1)
           )}
@@ -1242,6 +1270,7 @@ function ResumePdfDocument({
           photoSource={photoSource}
           usePhoto={usePhoto}
           styles={primitiveStyles}
+          showContact={templateId !== 'designer'}
         />
         {renderBody()}
       </Page>

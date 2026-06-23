@@ -86,12 +86,12 @@ export default function AiAssistPanel({ showToasts }: AiAssistPanelProps) {
           {state.mode === 'free' && (
             <div className={`md:col-span-2 rounded-xl border p-4 text-sm ${state.freeBetaAvailable ? 'border-emerald-500/20 bg-emerald-500/5 text-zinc-300' : 'border-amber-500/20 bg-amber-500/5 text-zinc-300'}`}>
               <strong className="text-white">Forge Free Beta AI</strong>
-              <p className="mt-1 text-zinc-400">Up to 25 writing actions and 3 pasted-text imports per 12-hour window. Availability is shared and may pause during high demand.</p>
+              <p className="mt-1 text-zinc-400">Up to 20 writing actions and 3 resume imports per 12-hour window. Availability is shared and may pause during high demand.</p>
               {state.freeStatusLoading ? (
                 <p className="mt-2 text-xs font-semibold text-zinc-300">Checking Free AI availability…</p>
               ) : state.freeBetaAvailable ? (
                 <p className="mt-2 text-xs font-semibold text-emerald-300">
-                  Forge Free Beta AI ready · {state.freeActionsRemaining ?? 25} free actions remaining.
+                  Forge Free Beta AI ready · {state.freeActionsRemaining ?? 20} free actions remaining.
                 </p>
               ) : (
                 <div className="mt-2 flex flex-wrap items-center gap-3">

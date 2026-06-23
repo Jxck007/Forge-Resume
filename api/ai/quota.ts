@@ -4,7 +4,7 @@ import type { IncomingMessage } from 'node:http';
 const WINDOW_MS = 12 * 60 * 60 * 1000;
 
 export const FREE_AI_QUOTA = {
-  deviceActions: 25,
+  deviceActions: 20,
   ipActions: 40,
   imports: 3,
   globalActions: 800,

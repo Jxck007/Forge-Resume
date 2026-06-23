@@ -117,23 +117,70 @@ export default function Auth({ onSuccess, onContinueAsGuest }: AuthProps) {
   };
 
   return (
-    <div className="forge-auth">
-      <section className="forge-auth-story">
+    <div className="forge-auth relative">
+      {/* Decorative gradient orbs */}
+      <div className="pointer-events-none fixed inset-0 overflow-hidden">
+        <div className="forge-orb forge-animate-orb-drift absolute -left-32 -top-32 h-96 w-96 rounded-full bg-emerald-500/6" />
+        <div className="forge-orb forge-animate-orb-drift-2 absolute -bottom-48 -right-32 h-[40rem] w-[40rem] rounded-full bg-indigo-500/6" />
+      </div>
+      <section className="forge-auth-story relative">
         <div className="forge-auth-story-inner">
-          <BrandLogo />
-          <div className="forge-auth-kicker">Built for the job search</div>
-          <h1>Build a resume that looks professional and gets you interview-ready.</h1>
-          <p>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
+          >
+            <BrandLogo />
+          </motion.div>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.1 }}
+            className="forge-auth-kicker"
+          >
+            Built for the job search
+          </motion.div>
+          <motion.h1
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.2 }}
+          >
+            Build a resume that looks professional and gets you interview-ready.
+          </motion.h1>
+          <motion.p
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.3 }}
+          >
             Create focused, professional resumes with an editor designed around how recruiters
             review technical candidates.
-          </p>
-          <div className="forge-auth-benefits">
-            {['Clear structure', 'Professional templates', 'Consistent PDF export'].map(item => (
-              <span key={item}><Check />{item}</span>
+          </motion.p>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.35 }}
+            className="forge-auth-benefits"
+          >
+            {['Clear structure', 'Professional templates', 'Consistent PDF export'].map((item, idx) => (
+              <motion.span
+                key={item}
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.3, delay: 0.4 + idx * 0.1 }}
+              >
+                <Check />
+                {item}
+              </motion.span>
             ))}
-          </div>
+          </motion.div>
 
-          <div className="forge-resume-mockup" aria-hidden="true">
+          <motion.div
+            initial={{ opacity: 0, y: 30, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ duration: 0.6, delay: 0.5 }}
+            className="forge-resume-mockup"
+            aria-hidden="true"
+          >
             <div className="forge-resume-paper">
               <div className="forge-resume-head">
                 <span />
@@ -155,11 +202,16 @@ export default function Auth({ onSuccess, onContinueAsGuest }: AuthProps) {
                 </div>
               </div>
             </div>
-            <div className="forge-mockup-score">
+            <motion.div
+              initial={{ scale: 0, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ duration: 0.4, delay: 0.8, type: 'spring', stiffness: 200 }}
+              className="forge-mockup-score"
+            >
               <strong>PDF</strong>
               <span>Export ready</span>
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
         </div>
       </section>
 

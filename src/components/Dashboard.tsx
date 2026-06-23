@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { memo, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { isTemplateId, ResumeData, TemplateId, UserSettings } from '../types';
 import {
@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import ConfirmationDialog from './ConfirmationDialog';
 import {
-  ALL_IMPORT_ACCEPT,
+  USER_IMPORT_ACCEPT,
   inferImportMode,
   prepareDocxImportPayload,
   prepareImageForImport,
@@ -29,7 +29,7 @@ import {
   validateImportFile,
 } from '../utils/resumeImport';
 import { assessResumeImport, ReviewedImport } from '../utils/aiImportQuality';
-import TemplateShowcase, { TEMPLATE_IDS, TEMPLATE_LABELS } from './TemplateShowcase';
+import TemplateShowcase, { TEMPLATE_LABELS, VISIBLE_TEMPLATE_IDS } from './TemplateShowcase';
 import ActionMenu from './ActionMenu';
 import { useAiSession } from '../contexts/AiSessionContext';
 import { getOrCreateForgeDeviceId } from '../utils/storageKeys';
@@ -52,7 +52,7 @@ interface DashboardProps {
   showToasts: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
-export default function Dashboard({
+function Dashboard({
   resumes,
   settings,
   hasProfileData,
@@ -99,7 +99,7 @@ export default function Dashboard({
     resumeId: '',
     resumeTitle: ''
   });
-  const { state: aiState, generate, isGenerating } = useAiSession();
+  const { state: aiState, generate, isGenerating, refreshFreeStatus } = useAiSession();
 
   useEffect(() => {
     importSourceRef.current = pastedText;
@@ -115,7 +115,8 @@ export default function Dashboard({
   // Computed metrics
   const activeResumes = resumes.filter(r => !r.isArchived);
   const latestResume = activeResumes[0] || null;
-  const importAvailable = !isGuestMode;
+  const resumeImportPaused = false;
+  const importAvailable = !resumeImportPaused;
   const openCreateDialog = () => {
     setCreateSource(hasProfileData ? 'profile' : 'blank');
     setCreateOpen(true);
@@ -137,6 +138,10 @@ export default function Dashboard({
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (createSource === 'import') {
+      if (resumeImportPaused) {
+        showToasts('Assisted resume import is paused. Create a blank resume or use your saved profile instead.', 'info');
+        return;
+      }
       setCreateOpen(false);
       setImportOpen(true);
       return;
@@ -185,7 +190,7 @@ export default function Dashboard({
     setDeleteDialog({ isOpen: false, resumeId: '', resumeTitle: '' });
   };
 
-  const assistedImportAvailable = !isGuestMode && (
+  const assistedImportAvailable = !isGuestMode && !resumeImportPaused && (
     (aiState.mode === 'free' && aiState.freeBetaAvailable === true) ||
     (aiState.mode === 'byok' && aiState.isConnected)
   );
@@ -328,6 +333,7 @@ export default function Dashboard({
         body: JSON.stringify(requestBody),
       });
       const payload = await response.json().catch(() => null) as null | { ok?: boolean; resume?: ResumeData; message?: string; warnings?: string[] };
+      if (aiState.mode === 'free') await refreshFreeStatus();
       if (!mountedRef.current) return;
       if (!response.ok || !payload?.ok || !payload.resume) {
         showToasts(payload?.message || 'Resume import could not be completed.', 'error');
@@ -465,23 +471,33 @@ export default function Dashboard({
     { key: 'volunteering' as const, label: 'Volunteering', fields: [['title', 'Role'], ['company', 'Organization'], ['description', 'Description']] },
   ] : [];
   return (
-    <div className="forge-product-page forge-dashboard-page mx-auto max-w-7xl px-4 py-6 font-sans sm:px-6 lg:px-8">
-      <section className="mb-4 rounded-2xl bg-[#141A21] p-5 ring-1 ring-white/[0.06] sm:p-6">
+    <div className="forge-product-page forge-dashboard-page relative mx-auto max-w-7xl px-4 py-6 font-sans sm:px-6 lg:px-8">
+      {/* Decorative background orbs */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="forge-orb forge-animate-orb-drift absolute -left-32 -top-20 h-80 w-80 rounded-full bg-emerald-500/5" />
+        <div className="forge-orb forge-animate-orb-drift-2 absolute -right-24 -bottom-16 h-72 w-72 rounded-full bg-indigo-500/5" />
+        <div className="forge-orb forge-animate-orb-drift absolute left-1/3 top-1/3 h-40 w-40 rounded-full bg-cyan-500/4" style={{ animationDelay: '3s' }} />
+      </div>
+      <section className="relative mb-4 overflow-hidden rounded-2xl bg-gradient-to-br from-[#141A21] to-[#11151B] p-5 ring-1 ring-white/[0.06] sm:p-6">
+        <div className="forge-animate-gradient pointer-events-none absolute inset-x-0 top-0 h-0.5" />
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
-            <span className="forge-eyebrow">{isGuestMode ? 'Guest workspace' : 'Career workspace'}</span>
+            <span className="forge-eyebrow flex items-center gap-2">
+              {isGuestMode ? 'Guest workspace' : 'Career workspace'}
+              <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400/60" />
+            </span>
             <h1 className="mt-2 text-2xl font-bold tracking-tight text-white sm:text-3xl">Build your next resume</h1>
             <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">
               Create, edit, preview, and export a polished resume from one clean workspace.
             </p>
-            {isGuestMode && <p className="mt-2 text-xs text-zinc-500">Guest work is saved locally on this device.</p>}
+            {isGuestMode && <p className="mt-2 flex items-center gap-1.5 text-xs text-zinc-500"><span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500/50 animate-pulse" />Guest work is saved locally on this device.</p>}
           </div>
           <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-2">
-            <button type="button" onClick={openCreateDialog} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-[#72DFCA] px-4 py-2.5 text-sm font-semibold text-[#08110F] hover:bg-[#91E8D7]">
-              <Plus className="h-4 w-4" /> Create Resume
+            <button type="button" onClick={openCreateDialog} className="group inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-400 to-teal-400 px-4 py-2.5 text-sm font-semibold text-[#08110F] shadow-lg shadow-emerald-900/20 transition hover:from-emerald-300 hover:to-teal-300 active:scale-[0.98]">
+              <Plus className="h-4 w-4 transition-transform group-hover:rotate-90" /> Create Resume
             </button>
-            <button type="button" onClick={() => setImportOpen(true)} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-zinc-200 ring-1 ring-white/10 hover:bg-white/[0.08]">
-              <Upload className="h-4 w-4 text-zinc-400" /> Import Resume Beta
+            <button type="button" onClick={() => resumeImportPaused ? showToasts('Assisted resume import is paused. Update your profile manually for now.', 'info') : setImportOpen(true)} disabled={resumeImportPaused} className="group inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-zinc-200 ring-1 ring-white/10 transition hover:bg-white/[0.08] hover:ring-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-50">
+              <Upload className="h-4 w-4 text-zinc-400 transition-transform group-hover:-translate-y-0.5 group-hover:text-emerald-300" /> {resumeImportPaused ? 'Import paused' : 'Import Resume Beta'}
             </button>
           </div>
         </div>
@@ -491,12 +507,12 @@ export default function Dashboard({
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="font-semibold text-white">Forge Free Beta AI</p>
-            <p className="mt-1 text-zinc-400">Use AI to improve summaries, rewrite bullets, fix grammar, and import resumes. Every suggestion is reviewed before applying.</p>
+            <p className="mt-1 text-zinc-400">Use AI to improve summaries, rewrite bullets, and fix grammar. Every suggestion is reviewed before applying.</p>
           </div>
           <div className="text-xs text-zinc-400">{aiStatusLabel}</div>
         </div>
         <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-medium text-zinc-400">
-          <span className="rounded-full bg-white/[0.04] px-2.5 py-1">25 writing actions per 12 hours</span>
+          <span className="rounded-full bg-white/[0.04] px-2.5 py-1">20 writing actions per 12 hours</span>
           <span className="rounded-full bg-white/[0.04] px-2.5 py-1">3 resume imports per 12 hours</span>
           <span className="rounded-full bg-white/[0.04] px-2.5 py-1">Limits protect the beta from abuse and cost spikes</span>
           <span className="rounded-full bg-white/[0.04] px-2.5 py-1">Using your own key does not use Forge Free AI quota</span>
@@ -524,15 +540,18 @@ export default function Dashboard({
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {[
           { title: 'Create Resume', copy: 'Start a new document', icon: Plus, action: openCreateDialog, primary: true },
-          { title: 'Import Resume Beta', copy: importAvailable ? 'Import pasted resume text' : 'Sign in to use import', icon: Upload, action: () => setImportOpen(true) },
+          { title: resumeImportPaused ? 'Import Resume Beta (Paused)' : 'Import Resume Beta', copy: resumeImportPaused ? 'Assisted import is paused. Update manually for now.' : importAvailable ? 'Import pasted resume text' : 'Sign in to use import', icon: Upload, action: () => resumeImportPaused ? showToasts('Assisted resume import is paused. Update your profile manually for now.', 'info') : setImportOpen(true), disabled: resumeImportPaused },
           { title: 'Choose Template', copy: 'Preview resume layouts', icon: Activity, action: () => setTemplateGalleryOpen(true) },
           { title: 'Open Latest Resume', copy: latestResume ? 'Continue your latest draft' : 'No draft available yet', icon: FileText, action: openLatestResume, disabled: !latestResume },
-        ].map(card => {
+        ].map((card, cardIdx) => {
           const Icon = card.icon;
           return (
-            <button
+            <motion.button
               key={card.title}
               type="button"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: cardIdx * 0.08, duration: 0.3 }}
               data-tour={
                 card.title === 'Create Resume' ? 'create-resume' :
                 card.title === 'Import Resume Beta' ? 'import-resume' :
@@ -541,7 +560,7 @@ export default function Dashboard({
               }
               onClick={card.action}
               disabled={card.disabled}
-              className={`group flex min-h-[72px] items-center gap-3 rounded-xl p-3 text-left disabled:cursor-not-allowed disabled:opacity-45 ${card.primary ? 'bg-[#18302D] ring-1 ring-[#72DFCA]/20 hover:bg-[#1C3935]' : 'bg-white/[0.035] ring-1 ring-white/[0.06] hover:bg-white/[0.06]'}`}
+              className={`group flex min-h-[72px] items-center gap-3 rounded-xl p-3 text-left disabled:cursor-not-allowed disabled:opacity-45 transition-all hover:scale-[1.01] active:scale-[0.98] ${card.primary ? 'bg-[#18302D] ring-1 ring-[#72DFCA]/20 hover:bg-[#1C3935] hover:ring-[#72DFCA]/40' : 'bg-white/[0.035] ring-1 ring-white/[0.06] hover:bg-white/[0.08] hover:ring-white/20'}`}
             >
               <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${card.primary ? 'bg-[#72DFCA] text-[#08110F]' : 'bg-white/[0.05] text-zinc-400'}`}>
                 <Icon className="h-4 w-4" />
@@ -550,7 +569,7 @@ export default function Dashboard({
                 <strong className="block truncate text-sm font-semibold text-white">{card.title}</strong>
                 <span className="mt-0.5 block truncate text-xs text-zinc-500">{card.copy}</span>
               </span>
-            </button>
+            </motion.button>
           );
         })}
         </div>
@@ -600,11 +619,12 @@ export default function Dashboard({
                 <span>Create Blank Resume</span>
               </button>
               <button
-                onClick={() => setImportOpen(true)}
-                className="flex items-center space-x-2 rounded-xl border border-[#2A2E37] bg-[#0F1115] px-5 py-2.5 text-sm font-semibold text-zinc-200 transition hover:border-zinc-600 hover:bg-[#131722] cursor-pointer"
+                onClick={() => resumeImportPaused ? showToasts('Assisted resume import is paused. Update your profile manually for now.', 'info') : setImportOpen(true)}
+                disabled={resumeImportPaused}
+                className="flex items-center space-x-2 rounded-xl border border-[#2A2E37] bg-[#0F1115] px-5 py-2.5 text-sm font-semibold text-zinc-200 transition hover:border-zinc-600 hover:bg-[#131722] cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Upload className="h-4 w-4" />
-                <span>Import Resume Beta</span>
+                <span>{resumeImportPaused ? 'Import paused' : 'Import Resume Beta'}</span>
               </button>
             </div>
           </div>
@@ -769,15 +789,15 @@ export default function Dashboard({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setCreateSource('import')}
+                      disabled={resumeImportPaused}
                       className={`rounded-xl border p-3 text-left transition ${
                         createSource === 'import'
                           ? 'border-emerald-400 bg-emerald-400/10 text-emerald-200'
                           : 'border-[#2A2E37] bg-[#0F1115] text-zinc-300 hover:border-zinc-600'
-                      }`}
+                      } disabled:cursor-not-allowed disabled:opacity-50`}
                     >
                       <div className="flex items-center justify-between gap-2 text-sm font-semibold"><span>Import resume beta</span>{isGuestMode && <small className="text-amber-300">Sign in</small>}</div>
-                      <div className="mt-1 text-xs text-zinc-400">Paste resume text and review the structured result before saving.</div>
+                      <div className="mt-1 text-xs text-zinc-400">Temporarily paused. Create a blank resume or update your profile manually for now.</div>
                     </button>
                     <button
                       type="button"
@@ -825,7 +845,7 @@ export default function Dashboard({
                     onChange={event => setNewTemplate(event.target.value as TemplateId)}
                     className="w-full rounded-xl border border-[#2A2E37] bg-[#0F1115] px-4 py-2.5 text-sm text-white outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10 transition-all"
                   >
-                    {TEMPLATE_IDS.map(templateId => (
+                    {VISIBLE_TEMPLATE_IDS.map(templateId => (
                       <option key={templateId} value={templateId}>{TEMPLATE_LABELS[templateId]}</option>
                     ))}
                   </select>
@@ -908,7 +928,7 @@ export default function Dashboard({
                         onChange={event => setNewTemplate(event.target.value as TemplateId)}
                         className="w-full rounded-xl border border-[#2A2E37] bg-[#0F1115] px-4 py-2.5 text-sm text-white outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/10 transition-all"
                       >
-                        {TEMPLATE_IDS.map(templateId => (
+                        {VISIBLE_TEMPLATE_IDS.map(templateId => (
                           <option key={templateId} value={templateId}>{TEMPLATE_LABELS[templateId]}</option>
                         ))}
                       </select>
@@ -941,28 +961,30 @@ export default function Dashboard({
                     </div>
                   ) : !assistedImportAvailable ? (
                     <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm font-medium text-amber-300">
-                      <p>Assisted import needs Forge Free Beta AI or a connected BYOK provider.</p>
+                      <p>{resumeImportPaused ? 'Assisted import is temporarily paused. Update your profile manually or create a new resume from scratch.' : 'Assisted import needs Forge Free Beta AI or a connected BYOK provider.'}</p>
                       <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            resetImport();
-                            onOpenAiAssist?.();
-                          }}
-                          className="rounded-xl bg-[#72DFCA] px-4 py-2 text-sm font-semibold text-[#08110F] transition hover:bg-[#91E8D7]"
-                        >
-                          Open AI Assist
-                        </button>
                         <button
                           type="button"
                           onClick={() => {
                             resetImport();
                             openBlankCreateDialog();
                           }}
-                          className="rounded-xl border border-[#2A2E37] bg-[#171A21] px-4 py-2 text-sm font-semibold text-zinc-200 transition hover:border-zinc-600 hover:bg-[#1A1F27]"
+                          className="rounded-xl bg-[#72DFCA] px-4 py-2 text-sm font-semibold text-[#08110F] transition hover:bg-[#91E8D7]"
                         >
                           Create manually
                         </button>
+                        {!resumeImportPaused && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              resetImport();
+                              onOpenAiAssist?.();
+                            }}
+                            className="rounded-xl border border-[#2A2E37] bg-[#171A21] px-4 py-2 text-sm font-semibold text-zinc-200 transition hover:border-zinc-600 hover:bg-[#1A1F27]"
+                          >
+                            Open AI Assist
+                          </button>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -985,9 +1007,9 @@ export default function Dashboard({
                           <Upload className="h-6 w-6 text-zinc-400 transition group-hover:text-emerald-300" />
                           <div>
                             <p className="text-sm font-semibold text-white">Drop or choose a resume file</p>
-                            <p className="mt-1 text-xs text-zinc-500">PDF, DOCX, PNG, JPG, JPEG, or WEBP</p>
+                            <p className="mt-1 text-xs text-zinc-500">PDF, PNG, JPG, JPEG, or WEBP</p>
                           </div>
-                          <input ref={fileInputRef} type="file" accept={ALL_IMPORT_ACCEPT} onChange={event => handleImportFileSelected(event.target.files?.[0] || null)} className="sr-only" />
+                          <input ref={fileInputRef} type="file" accept={USER_IMPORT_ACCEPT} onChange={event => handleImportFileSelected(event.target.files?.[0] || null)} className="sr-only" />
                         </label>
                         {importFile && (
                           <div className="mt-3 rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-3 text-xs text-zinc-300">
@@ -1167,22 +1189,7 @@ export default function Dashboard({
                     </div>
                     <h4 className="mt-4 text-base font-semibold text-white">{reviewData ? 'Saving resume…' : 'Extracting resume…'}</h4>
                     <p className="mt-1 text-sm text-zinc-400">{reviewData ? 'Creating your imported draft' : importStatus || 'Preparing review'}</p>
-                    {!reviewData && (
-                      <div className="mt-4 grid grid-cols-2 gap-2 text-left text-xs text-zinc-500">
-                        {['Reading file', 'Extracting text', 'Running AI structuring', 'Preparing review'].map(step => (
-                          <div
-                            key={step}
-                            className={`rounded-xl border px-3 py-2 ${
-                              importStatus === step
-                                ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200'
-                                : 'border-[#2A2E37] bg-[#0F1115]'
-                            }`}
-                          >
-                            {step}
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    {!reviewData && <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-[#263241]"><div className="h-full w-2/3 animate-pulse rounded-full bg-emerald-400" /></div>}
                   </div>
                 </div>
               )}
@@ -1204,3 +1211,5 @@ export default function Dashboard({
     </div>
   );
 }
+
+export default memo(Dashboard);

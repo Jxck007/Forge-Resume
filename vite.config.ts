@@ -11,6 +11,17 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'vendor-react-pdf': ['@react-pdf/renderer'],
+            'vendor-pdfjs': ['pdfjs-dist'],
+            'vendor-docx': ['docx'],
+          },
+        },
+      },
+    },
     server: {
       // HMR and file watching can be disabled in constrained deployment environments.
       hmr: process.env.DISABLE_HMR !== 'true',
