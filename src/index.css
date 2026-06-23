@@ -1964,6 +1964,81 @@ html {
   }
 }
 
+/* ── RESPONSIVE: TABLET (768–1024px) ── */
+@media (min-width: 768px) and (max-width: 1024px) {
+  .forge-header-inner {
+    height: 60px;
+    padding: 0 16px;
+  }
+
+  .forge-product-page {
+    padding-left: 20px !important;
+    padding-right: 20px !important;
+  }
+
+  #resume-builder-form-panel,
+  #resume-preview-panel {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+  }
+
+  .forge-metric-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  .forge-quick-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .forge-quick-actions > div {
+    grid-column: 1 / -1 !important;
+  }
+
+  .forge-settings-layout {
+    grid-template-columns: 1fr !important;
+  }
+
+  .forge-settings-nav {
+    position: static !important;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  .forge-settings-nav .forge-primary-button {
+    grid-column: 1 / -1 !important;
+  }
+
+  .forge-pdf-preview-frame {
+    max-width: 100% !important;
+  }
+
+  .forge-profile-tabs {
+    top: 68px !important;
+  }
+
+  .forge-resume-card {
+    min-height: 180px !important;
+  }
+
+  .forge-provider-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .forge-auth {
+    grid-template-columns: 1fr !important;
+    min-height: 100vh !important;
+  }
+
+  .forge-auth-story {
+    display: none !important;
+  }
+
+  .forge-auth-panel {
+    min-height: 100vh !important;
+    padding: 80px 32px 48px !important;
+  }
+}
+
 @media (max-width: 1023px) {
   .forge-header-inner {
     gap: 8px;
@@ -2356,11 +2431,269 @@ html {
   }
 
   #resume-preview-panel {
-    padding: 10px;
+    padding: 8px;
+    overflow-x: hidden;
   }
 
   .resume-canvas {
-    padding: 8px;
+    padding: 6px;
+    min-height: 320px !important;
+  }
+
+  /* Preview: fit width on mobile, constrain height */
+  .forge-pdf-preview-frame {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 80dvh;
+    min-height: 200px;
+    height: auto !important;
+    aspect-ratio: 210 / 297;
+  }
+
+  .forge-pdf-viewer {
+    min-height: 200px !important;
+    max-height: 80dvh;
+  }
+
+  /* Dashboard: 1 column on mobile — target by base class, not responsive chain */
+  .forge-dashboard-page .grid-cols-1 {
+    grid-template-columns: 1fr !important;
+    gap: 0.75rem;
+  }
+
+  /* Template showcase: single column on mobile */
+  section[role="dialog"] div[class*="min-h-0"][class*="flex-1"] {
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: visible !important;
+  }
+
+  /* Template list: horizontal scroll replaced with vertical */
+  [role="dialog"] [class*="overflow-x-auto"] {
+    overflow-x: visible !important;
+    flex-direction: column;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  section[role="dialog"] [class*="w-16"] {
+    display: none;
+  }
+
+  section[role="dialog"] > div:first-child button {
+    width: 100% !important;
+    justify-content: center;
+  }
+
+  /* Modals: full viewport on mobile — covers all modal widths */
+  .fixed.inset-0.z-50 > div[class*="max-w-"],
+  .fixed.inset-0.z-50 > [class*="rounded-2xl"][class*="border"] {
+    max-width: 100% !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    max-height: 100dvh !important;
+    height: 100dvh !important;
+  }
+
+  /* Import dialog: full screen on mobile */
+  .fixed.inset-0.z-50 > [class*="rounded-2xl"][class*="border"] {
+    border-radius: 0 !important;
+    max-height: 100dvh !important;
+    height: 100dvh !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* Sticky footer for import review always visible */
+  .fixed.inset-0.z-50 .sticky.bottom-0 {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    background: #171A21;
+    border-top: 1px solid #2A2E37;
+  }
+
+  /* Template showcase dialog: full screen */
+  .fixed.inset-0.z-\[70\] > section {
+    max-height: 100dvh !important;
+    height: 100dvh !important;
+    border-radius: 0 !important;
+  }
+
+  /* Builder section cards: full-width controls on mobile */
+  #resume-builder-form-panel [class*="grid-cols-1"][class*="sm\:grid-cols-2"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  #resume-builder-form-panel [class*="sm\:col-span-2"] {
+    grid-column: 1 / -1 !important;
+  }
+
+  /* Builder heading: stack on mobile */
+  .forge-builder-heading {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .forge-builder-heading .forge-secondary-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Section control buttons always visible on mobile */
+  #resume-builder-form-panel [class*="opacity-0"],
+  #resume-builder-form-panel [class*="sm\:opacity-0"] {
+    opacity: 1 !important;
+    position: static !important;
+  }
+
+  #resume-builder-form-panel [class*="group"][class*="hover:opacity"] {
+    opacity: 1 !important;
+    position: static !important;
+  }
+
+  /* Touch-friendly: 44px min-height for actionable controls only */
+  .forge-primary-button,
+  .forge-secondary-button,
+  .forge-danger-button,
+  .forge-google-button,
+  .forge-nav-item,
+  .forge-profile-trigger,
+  .forge-text-button,
+  .forge-mobile-nav button,
+  .forge-quick-actions > button,
+  button[type="submit"],
+  button[type="button"].forge-primary-button,
+  button[type="button"].forge-secondary-button,
+  input,
+  select,
+  textarea,
+  .forge-auth-switch button,
+  .forge-creator-links a,
+  .forge-builder-view-tab,
+  [role="menuitem"],
+  .forge-settings-nav > button {
+    min-height: 44px;
+  }
+  
+  /* Exclude compact icon-only controls */
+  button[aria-label*="close"],
+  button[aria-label*="Close"],
+  button[aria-label*="dismiss"],
+  button[aria-label*="Dismiss"],
+  button[aria-label*="Remove"],
+  button[aria-label*="remove"],
+  button[aria-label*="Move"],
+  button[aria-label*="move"],
+  button[aria-label*="Collapse"],
+  button[aria-label*="collapse"],
+  button[aria-label*="Expand"],
+  button[aria-label*="expand"],
+  button[aria-label*="Show"],
+  button[aria-label*="Hide"],
+  button[aria-label*="hide"],
+  .forge-key-input button {
+    min-height: 0 !important;
+    height: auto;
+  }
+
+  /* Form inputs: larger touch targets */
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+  }
+
+  /* AI panel: no overflow on mobile */
+  .forge-settings-panel [class*="space-y-4"] {
+    overflow-x: hidden;
+  }
+
+  .forge-settings-panel [class*="grid-cols-1"],
+  .forge-settings-panel .grid.max-w-3xl {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Export menu: full width trigger on mobile */
+  .forge-preview-workspace .no-print > div:last-child .forge-secondary-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Import review: scrollable body */
+  .flex.max-h-\[92vh\] > .min-h-0.flex-1 {
+    max-height: none !important;
+  }
+
+  /* General: prevent horizontal overflow on all pages */
+  .forge-product-page,
+  .forge-page,
+  .forge-settings {
+    overflow-x: hidden;
+  }
+
+  .app-shell {
+    overflow-x: hidden;
+  }
+
+  main {
+    overflow-x: hidden;
+  }
+
+  /* AI assist buttons: no overflow on mobile */
+  .md\:grid-cols-2 {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Profile tabs: compact on mobile */
+  .forge-profile-tabs {
+    gap: 2px;
+    padding: 3px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Settings: compact mobile nav */
+  .forge-settings-nav > button {
+    font-size: 11px;
+    padding: 0 8px;
+    min-height: 44px;
+  }
+
+  .forge-settings-nav > button svg {
+    width: 14px;
+  }
+
+  /* Preview template controls: horizontal scroll on mobile */
+  .forge-preview-workspace [class*="grid-cols-1"][class*="xs\:grid-cols-2"] {
+    display: flex !important;
+    overflow-x: auto;
+    gap: 6px;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .forge-preview-workspace [class*="grid-cols-1"][class*="xs\:grid-cols-2"] > button {
+    min-width: 130px;
+    flex-shrink: 0;
+  }
+
+  /* Toast drawer: move to bottom center on mobile */
+  .fixed.bottom-6.right-6.max-w-sm {
+    right: 10px !important;
+    bottom: 80px !important;
+    max-width: calc(100% - 20px) !important;
+  }
+
+  /* Decorative orbs: reduce on mobile for perf */
+  .forge-orb {
+    opacity: 0.15;
+    display: none;
+  }
+
+  .forge-animate-orb-drift,
+  .forge-animate-orb-drift-2 {
+    display: none;
   }
 
 }
